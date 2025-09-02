@@ -164,6 +164,74 @@ namespace RegistryParser {
         return "Invalid";
     }
 
+    std::string IsSignatureTrusted(std::string& signature, const std::string& filePath) {
+        if (GetFileAttributesA(filePath.c_str()) == INVALID_FILE_ATTRIBUTES)
+            return "";
+
+        // If file already invalid or deleted, skip
+        if (signature == "Deleted" || signature == "Invalid")
+            return "";
+
+        // First, check Authenticode signature
+        std::wstring widePath(filePath.begin(), filePath.end());
+        WINTRUST_FILE_INFO fileData = {};
+        fileData.cbStruct = sizeof(WINTRUST_FILE_INFO);
+        fileData.pcwszFilePath = widePath.c_str();
+
+        GUID WVTPolicyGUID = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+        WINTRUST_DATA winTrustData = {};
+        winTrustData.cbStruct = sizeof(winTrustData);
+        winTrustData.dwUIChoice = WTD_UI_NONE;
+        winTrustData.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
+        winTrustData.dwUnionChoice = WTD_CHOICE_FILE;
+        winTrustData.dwStateAction = WTD_STATEACTION_VERIFY;
+        winTrustData.pFile = &fileData;
+
+        LONG lStatus = WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
+
+        // Close the state
+        winTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
+        WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
+
+        if (lStatus == ERROR_SUCCESS) {
+            return "Trusted";
+        }
+
+        // If no Authenticode, check Catalog signature
+        HCATADMIN hCatAdmin = NULL;
+        bool catalogTrusted = false;
+        if (CryptCATAdminAcquireContext(&hCatAdmin, NULL, 0)) {
+            HANDLE hFile = CreateFileA(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+            if (hFile != INVALID_HANDLE_VALUE) {
+                DWORD dwHashSize = 0;
+                if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, NULL, 0)) {
+                    BYTE* pbHash = new BYTE[dwHashSize];
+                    if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, pbHash, 0)) {
+                        HCATINFO hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, pbHash, dwHashSize, 0, NULL);
+                        if (hCatInfo) {
+                            catalogTrusted = true;
+                            CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0);
+                        }
+                    }
+                    delete[] pbHash;
+                }
+                CloseHandle(hFile);
+            }
+            CryptCATAdminReleaseContext(hCatAdmin, 0);
+        }
+
+        if (catalogTrusted) {
+            return "Trusted";
+        }
+
+        // If neither Authenticode nor catalog, mark signature invalid
+        signature = "Invalid";
+
+        // Determine return value based on previous lStatus
+        if (lStatus == TRUST_E_NOSIGNATURE) return "Unsigned";
+        return "Untrusted";
+    }
+
     std::string GetFileModificationTime(const std::string& filePath) {
         if (GetFileAttributesA(filePath.c_str()) == INVALID_FILE_ATTRIBUTES) {
             return "";
@@ -224,6 +292,16 @@ namespace RegistryParser {
             std::string path(valueName.data());
 
             std::string signature = CheckFileSignature(path);
+            std::string trusted;
+            if (signature == "Deleted") {
+                trusted = ""; // deleted file, leave blank
+            }
+            else if (signature == "Invalid") {
+                trusted = "Untrusted"; // unsigned or bad signature
+            }
+            else {
+                trusted = IsSignatureTrusted(signature, path); // signed file, check trust
+            }
             std::string modTime = GetFileModificationTime(path);
 
             entries.push_back({
@@ -232,6 +310,7 @@ namespace RegistryParser {
                 path.substr(path.find_last_of('\\') + 1),
                 path,
                 signature,
+                trusted, // <-- ADDED
                 "Current User",
                 "",
                 "HKCU\\" + keyPath,
@@ -278,6 +357,16 @@ namespace RegistryParser {
             std::string path = CleanMuiCachePath(valueName.data());
 
             std::string signature = CheckFileSignature(path);
+            std::string trusted;
+            if (signature == "Deleted") {
+                trusted = ""; // deleted file, leave blank
+            }
+            else if (signature == "Invalid") {
+                trusted = "Untrusted"; // unsigned or bad signature
+            }
+            else {
+                trusted = IsSignatureTrusted(signature, path); // signed file, check trust
+            }
             std::string modTime = GetFileModificationTime(path);
 
             entries.push_back({
@@ -286,6 +375,7 @@ namespace RegistryParser {
                 path.substr(path.find_last_of('\\') + 1),
                 path,
                 signature,
+                trusted, // <-- ADDED
                 "Current User",
                 "",
                 "HKCU\\" + keyPath,
@@ -388,12 +478,24 @@ namespace RegistryParser {
                             modTime = GetFileModificationTime(path);
                         }
 
+                        std::string trusted;
+                        if (signature == "Deleted") {
+                            trusted = ""; // deleted file, leave blank
+                        }
+                        else if (signature == "Invalid") {
+                            trusted = "Untrusted"; // unsigned or bad signature
+                        }
+                        else {
+                            trusted = IsSignatureTrusted(signature, path); // signed file, check trust
+                        }
+
                         entries.push_back({
                             executionTime,
                             modTime,
                             application,
                             path,
                             signature,
+                            trusted, // <-- ADDED
                             user,
                             sid,
                             "HKLM\\" + bamPath,
@@ -419,7 +521,7 @@ namespace RegistryParser {
             return;
         }
 
-        csvFile << "ExecutionTime,ModificationTime,Application,Path,Signature,User,SID,RegistryPath,RegistryType\n";
+        csvFile << "ExecutionTime,ModificationTime,Application,Path,Signature,Trusted,User,SID,RegistryPath,RegistryType\n";
 
         for (const auto& entry : entries) {
             std::string escapePath = entry.path;
@@ -434,6 +536,7 @@ namespace RegistryParser {
                 << "\"" << entry.application << "\","
                 << "\"" << escapePath << "\","
                 << "\"" << entry.signature << "\","
+                << "\"" << entry.trusted << "\","
                 << "\"" << entry.user << "\","
                 << "\"" << entry.sid << "\","
                 << "\"" << entry.regPath << "\","

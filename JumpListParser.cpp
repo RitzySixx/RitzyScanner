@@ -1,4 +1,4 @@
-#define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
+﻿#define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #include "JumpListParser.h"
 #include <shlobj.h>
 #include <propkey.h>
@@ -63,59 +63,45 @@ namespace JumpListParser {
     }
 
     std::string CheckFileSignature(const std::wstring& filePath) {
-        if (GetFileExtension(filePath).empty()) {
-            return "N/A";
+        DWORD attrs = GetFileAttributesW(filePath.c_str());
+        if (attrs == INVALID_FILE_ATTRIBUTES) {
+            return "Deleted"; // file missing
         }
 
-        WINTRUST_FILE_INFO fileData;
-        memset(&fileData, 0, sizeof(fileData));
-        fileData.cbStruct = sizeof(WINTRUST_FILE_INFO);
+        WINTRUST_FILE_INFO fileData = {};
+        fileData.cbStruct = sizeof(fileData);
         fileData.pcwszFilePath = filePath.c_str();
-        fileData.hFile = NULL;
-        fileData.pgKnownSubject = NULL;
 
         GUID WVTPolicyGUID = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-        WINTRUST_DATA winTrustData;
-        memset(&winTrustData, 0, sizeof(winTrustData));
+        WINTRUST_DATA winTrustData = {};
         winTrustData.cbStruct = sizeof(winTrustData);
-        winTrustData.pPolicyCallbackData = NULL;
-        winTrustData.pSIPClientData = NULL;
         winTrustData.dwUIChoice = WTD_UI_NONE;
         winTrustData.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
         winTrustData.dwUnionChoice = WTD_CHOICE_FILE;
         winTrustData.dwStateAction = WTD_STATEACTION_VERIFY;
-        winTrustData.hWVTStateData = NULL;
-        winTrustData.pwszURLReference = NULL;
-        winTrustData.dwProvFlags = WTD_REVOCATION_CHECK_CHAIN |
-            WTD_HASH_ONLY_FLAG |
-            WTD_USE_DEFAULT_OSVER_CHECK |
-            WTD_LIFETIME_SIGNING_FLAG |
-            WTD_CACHE_ONLY_URL_RETRIEVAL;
         winTrustData.pFile = &fileData;
 
         LONG lStatus = WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
 
+        // Close state
+        winTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
+        WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
+
         if (lStatus == ERROR_SUCCESS) {
-            winTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
-            WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
             return "Valid (Authenticode)";
         }
 
+        // Check catalog signature
         HCATADMIN hCatAdmin;
         if (CryptCATAdminAcquireContext(&hCatAdmin, NULL, 0)) {
             HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
             if (hFile != INVALID_HANDLE_VALUE) {
-                DWORD dwHashSize;
+                DWORD dwHashSize = 0;
                 if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, NULL, 0)) {
                     BYTE* pbHash = new BYTE[dwHashSize];
                     if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, pbHash, 0)) {
-                        CATALOG_INFO catalogInfo;
-                        memset(&catalogInfo, 0, sizeof(catalogInfo));
-                        catalogInfo.cbStruct = sizeof(catalogInfo);
-
                         HCATINFO hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, pbHash, dwHashSize, 0, NULL);
                         if (hCatInfo) {
-                            CryptCATCatalogInfoFromContext(hCatInfo, &catalogInfo, 0);
                             CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0);
                             delete[] pbHash;
                             CloseHandle(hFile);
@@ -131,6 +117,41 @@ namespace JumpListParser {
         }
 
         return "Invalid";
+    }
+
+    std::string IsSignatureTrusted(const std::string& signatureStatus, const std::wstring& filePath) {
+        if (signatureStatus == "Deleted") {
+            return ""; // deleted → leave blank
+        }
+
+        if (signatureStatus == "Invalid" || signatureStatus == "Unsigned") {
+            return "Untrusted"; // no digital signature
+        }
+
+        // File is signed, verify trust
+        WINTRUST_FILE_INFO fileInfo = {};
+        fileInfo.cbStruct = sizeof(WINTRUST_FILE_INFO);
+        fileInfo.pcwszFilePath = filePath.c_str();
+
+        GUID WVTPolicyGUID = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+        WINTRUST_DATA winTrustData = {};
+        winTrustData.cbStruct = sizeof(winTrustData);
+        winTrustData.dwUIChoice = WTD_UI_NONE;
+        winTrustData.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
+        winTrustData.dwUnionChoice = WTD_CHOICE_FILE;
+        winTrustData.dwStateAction = WTD_STATEACTION_VERIFY;
+        winTrustData.pFile = &fileInfo;
+
+        LONG lStatus = WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
+
+        winTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
+        WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
+
+        if (lStatus == ERROR_SUCCESS) {
+            return "Trusted";
+        }
+
+        return "Untrusted";
     }
 
     std::wstring GetPropertyString(IPropertyStore* pPropStore, const PROPERTYKEY& key) {
@@ -215,12 +236,28 @@ namespace JumpListParser {
             CloseHandle(hFile);
         }
 
-        if (!entry.path.empty() && !GetFileExtension(entry.path).empty()) {
-            entry.signatureStatus = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(
-                CheckFileSignature(entry.path));
+        if (!entry.path.empty()) {
+            // Check the file signature (Authenticode / Catalog / Deleted)
+            std::string sigStatus = CheckFileSignature(entry.path);
+            entry.signatureStatus = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(sigStatus);
+
+            // Determine trust
+            std::string trusted;
+            if (sigStatus == "Deleted") {
+                trusted = ""; // deleted → leave blank
+            }
+            else if (sigStatus == "Invalid" || sigStatus == "Unsigned") {
+                trusted = "Untrusted"; // no digital signature
+            }
+            else {
+                trusted = IsSignatureTrusted(sigStatus, entry.path); // signed → check trust
+            }
+
+            entry.trusted = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(trusted);
         }
         else {
             entry.signatureStatus = L"N/A";
+            entry.trusted = L"";
         }
 
         entries.push_back(entry);
@@ -421,10 +458,10 @@ namespace JumpListParser {
         }
 
         if (isCustom) {
-            csvFile << "Jumplist Timestamp,Creation Time,Access Time,Write Time,Name,Title,Path,Signature,Arguments,Icon Path,Jumplist File,Entry Type,Lnk Path\n";
+            csvFile << "Jumplist Timestamp,Creation Time,Access Time,Write Time,Name,Title,Path,Signature,Trusted,Arguments,Icon Path,Jumplist File,Entry Type,Lnk Path\n";
         }
         else {
-            csvFile << "Jumplist Timestamp,Creation Time,Access Time,Write Time,Name,Path,Signature,Jumplist File,Entry Type,Lnk Path\n";
+            csvFile << "Jumplist Timestamp,Creation Time,Access Time,Write Time,Name,Path,Signature,Trusted,Jumplist File,Entry Type,Lnk Path\n";
         }
 
         for (const auto& entry : entries) {
@@ -440,6 +477,7 @@ namespace JumpListParser {
                     << "\"" << WideToUTF8(entry.title) << "\","
                     << "\"" << WideToUTF8(entry.path) << "\","
                     << "\"" << WideToUTF8(entry.signatureStatus) << "\","
+                    << "\"" << WideToUTF8(entry.trusted) << "\","
                     << "\"" << WideToUTF8(entry.arguments) << "\","
                     << "\"" << WideToUTF8(entry.iconPath) << "\","
                     << "\"" << WideToUTF8(entry.jumplistFile) << "\","
@@ -454,6 +492,7 @@ namespace JumpListParser {
                     << "\"" << WideToUTF8(fileName) << "\","
                     << "\"" << WideToUTF8(entry.path) << "\","
                     << "\"" << WideToUTF8(entry.signatureStatus) << "\","
+                    << "\"" << WideToUTF8(entry.trusted) << "\","
                     << "\"" << WideToUTF8(entry.jumplistFile) << "\","
                     << "\"" << WideToUTF8(entry.entryType) << "\","
                     << "\"" << WideToUTF8(entry.lnkPath) << "\"\n";

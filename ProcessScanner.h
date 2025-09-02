@@ -10,6 +10,7 @@ struct FileInfo {
     std::string path;
     std::string modTime;
     std::string signatureStatus;
+    std::string trusted;
     bool fileExists;
     std::string sourceProcess;
     DWORD sourcePID;

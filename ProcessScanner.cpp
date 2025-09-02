@@ -133,6 +133,65 @@ namespace ProcessScanner {
         return "Invalid";
     }
 
+    std::string IsSignatureTrusted(std::string& signatureStatus, const std::string& filePath)
+    {
+        LONG lStatus;
+        GUID policyGUID = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+
+        WINTRUST_FILE_INFO fileInfo = {};
+        fileInfo.cbStruct = sizeof(WINTRUST_FILE_INFO);
+        std::wstring wFilePath(filePath.begin(), filePath.end());
+        fileInfo.pcwszFilePath = wFilePath.c_str();
+
+        WINTRUST_DATA winTrustData = {};
+        winTrustData.cbStruct = sizeof(winTrustData);
+        winTrustData.dwUIChoice = WTD_UI_NONE;
+        winTrustData.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
+        winTrustData.dwUnionChoice = WTD_CHOICE_FILE;
+        winTrustData.dwStateAction = 0;
+        winTrustData.pFile = &fileInfo;
+
+        lStatus = WinVerifyTrust(NULL, &policyGUID, &winTrustData);
+
+        if (lStatus == ERROR_SUCCESS) {
+            return "Trusted";
+        }
+        else if (lStatus == TRUST_E_NOSIGNATURE) {
+            // Check catalog if no Authenticode signature
+            HCATADMIN hCatAdmin;
+            if (CryptCATAdminAcquireContext(&hCatAdmin, NULL, 0)) {
+                HANDLE hFile = CreateFileA(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+                if (hFile != INVALID_HANDLE_VALUE) {
+                    DWORD dwHashSize;
+                    if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, NULL, 0)) {
+                        BYTE* pbHash = new BYTE[dwHashSize];
+                        if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, pbHash, 0)) {
+                            HCATINFO hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, pbHash, dwHashSize, 0, NULL);
+                            if (hCatInfo) {
+                                CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0);
+                                delete[] pbHash;
+                                CloseHandle(hFile);
+                                CryptCATAdminReleaseContext(hCatAdmin, 0);
+                                signatureStatus = "Valid (Catalog)";
+                                return "Trusted";
+                            }
+                        }
+                        delete[] pbHash;
+                    }
+                    CloseHandle(hFile);
+                }
+                CryptCATAdminReleaseContext(hCatAdmin, 0);
+            }
+
+            signatureStatus = "Unsigned";
+            return "Unsigned";
+        }
+        else {
+            signatureStatus = "Invalid";
+            return "Untrusted";
+        }
+    }
+
     std::string GetServiceNameFromPID(DWORD pid) {
         SC_HANDLE schSCManager = OpenSCManagerA(NULL, NULL, SC_MANAGER_ENUMERATE_SERVICE);
         if (schSCManager == NULL) return "";
@@ -322,7 +381,7 @@ namespace ProcessScanner {
             return;
         }
 
-        csvFile << "Time,File Name,File Path,Signature Status,File Exists,Source Process,Source PID\n";
+        csvFile << "Time,File Name,File Path,Signature Status,Trusted,File Exists,Source Process,Source PID\n";
         for (const auto& file : files) {
             std::string timelineTime;
             if (file.fileExists && file.modTime != "Unknown") {
@@ -350,6 +409,7 @@ namespace ProcessScanner {
                 << "\"" << escapedPath.substr(escapedPath.find_last_of("\\/") + 1) << "\","
                 << "\"" << escapedPath << "\","
                 << "\"" << file.signatureStatus << "\","
+                << "\"" << file.trusted << "\","   // <-- NEW
                 << "\"" << (file.fileExists ? "Yes" : "No") << "\","
                 << "\"" << file.sourceProcess << "\","
                 << "\"" << file.sourcePID << "\"\n";
@@ -402,6 +462,15 @@ namespace ProcessScanner {
                         info.fileExists = FileExists(path);
                         info.modTime = info.fileExists ? GetFileModTime(path) : "";
                         info.signatureStatus = info.fileExists ? CheckFileSignature(path) : "DELETED";
+                        if (info.signatureStatus == "DELETED") {
+                            info.trusted = ""; // deleted file, leave blank
+                        }
+                        else if (info.signatureStatus == "Invalid") {
+                            info.trusted = "Untrusted"; // no digital signature
+                        }
+                        else {
+                            info.trusted = IsSignatureTrusted(info.signatureStatus, path); // signed file, check trust
+                        }
                         info.sourceProcess = service;
                         info.sourcePID = pid;
                         allFileInfo.push_back(info);
@@ -438,6 +507,15 @@ namespace ProcessScanner {
                         info.fileExists = FileExists(path);
                         info.modTime = info.fileExists ? GetFileModTime(path) : "";
                         info.signatureStatus = info.fileExists ? CheckFileSignature(path) : "DELETED";
+                        if (info.signatureStatus == "DELETED") {
+                            info.trusted = ""; // deleted file, leave blank
+                        }
+                        else if (info.signatureStatus == "Invalid") {
+                            info.trusted = "Untrusted"; // no digital signature
+                        }
+                        else {
+                            info.trusted = IsSignatureTrusted(info.signatureStatus, path); // signed file, check trust
+                        }
                         info.sourceProcess = displayName;
                         info.sourcePID = pid;
                         allFileInfo.push_back(info);

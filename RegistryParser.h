@@ -11,6 +11,7 @@ struct RegistryEntry {
     std::string application;
     std::string path;
     std::string signature;
+    std::string trusted;
     std::string user;
     std::string sid;
     std::string regPath;

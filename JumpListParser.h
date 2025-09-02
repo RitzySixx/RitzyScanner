@@ -17,6 +17,7 @@ struct JumplistEntry {
     FILETIME writeTime;
     std::wstring appId;
     std::wstring signatureStatus;
+    std::wstring trusted;
     std::wstring jumplistFile;
     std::wstring entryType;
     std::wstring lnkPath;
