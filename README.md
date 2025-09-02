@@ -27,14 +27,10 @@ A Windows-based tool for **process memory scanning**, **file signature verificat
    - Retrieves service PIDs and associates files found in memory with their source service.
 
 4. **Registry Checks**
-   - Reads and parses important Windows registry entries (currently for FiveM / GTAV checks).
-   - Detects:
-     - Meta files in AI folders
-     - D3D10.dll in plugins
-     - Custom x64a.rpf files (e.g., Bigger Hitboxes mods)
+   - Reads and parses important Windows registry entries for execution proof and file paths / existance of files
 
 5. **FiveM / GTAV Checks**
-   - Basic checks for game modifications and cheat artifacts in memory, services, and registry.
+   - Basic FiveM checks that look for Meta files in AI folder, D3D10.dll in plugins, Bigger Hitboxes x64a.rpf file in GTAV directory.
 
 6. **File Verification & Security**
    - Checks digital signatures of all files discovered.
