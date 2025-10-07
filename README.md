@@ -66,20 +66,6 @@ ForensicsScanner is a C++ application that performs multiple types of forensic a
 - Minimum pattern length: 5 characters
 - **Note**: Integrated into the main scanning process
 
-## Requirements
-
-- Windows operating system
-- Visual Studio 2019 or later (for building)
-- Administrator privileges (recommended for full functionality)
-- C++17 compatible compiler
-
-## Building
-
-1. Open the `ForensicsScanner.vcxproj` file in Visual Studio
-2. Select the appropriate build configuration (Release recommended)
-3. Build the solution
-4. The executable will be generated in `x64/Release/ForensicsScanner.exe`
-
 ## Usage
 
 1. Run the executable as administrator for best results
@@ -121,7 +107,6 @@ The memory scanner includes extensive pattern matching for known cheats and susp
 - Cheat engine signatures
 - Mod files and scripts
 - Bypass tools and spoofers
-- Network-related cheat indicators
 
 ## Contributing
 
@@ -135,3 +120,4 @@ This is a specialized forensics tool. Contributions should focus on:
 
 
 This tool is provided for educational and legitimate forensic purposes. Users are responsible for complying with applicable laws and regulations when using this software.
+
