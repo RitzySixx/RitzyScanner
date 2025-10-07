@@ -131,10 +131,7 @@ This is a specialized forensics tool. Contributions should focus on:
 - Performance optimizations
 - Cross-platform compatibility (if applicable)
 
-## License
-
-[Add your license information here]
-
 ## Disclaimer
+
 
 This tool is provided for educational and legitimate forensic purposes. Users are responsible for complying with applicable laws and regulations when using this software.
