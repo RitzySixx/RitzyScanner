@@ -1,72 +1,140 @@
-# RitzyScanner
+# ForensicsScanner
 
-A Windows-based tool for **process memory scanning**, **file signature verification**, **Jumplist parsing**, **service scanning**, and **registry checks** for forensic and security purposes.
+A comprehensive Windows forensics tool designed for analyzing system artifacts and detecting potential cheats/malware, particularly in gaming environments like GTA V and FiveM.
+
+## Description
+
+ForensicsScanner is a C++ application that performs multiple types of forensic analysis on Windows systems. It scans registry entries, process memory, jump lists, Windows services, prefetch files, and specific directories for suspicious activity. The tool is particularly useful for anti-cheat detection in online gaming communities.
 
 ## Features
 
-1. **Process Memory Scanner**
-   - Scans all running processes for executable, DLL, SYS, and script files in memory.
-   - Checks each file for:
-     - File existence
-     - Modification timestamp
-     - Signature validity (Authenticode / Catalog / Invalid)
-     - Trust status (Trusted / Untrusted / Unsigned)
-   - Exports results to a CSV file named `ProcessMemoryScan_YYYYMMDD_HHMMSS.csv`.
+### 1. Registry Parser
+- Parses Windows registry for application execution history
+- Analyzes MuiCache entries for recently accessed applications
+- Checks file signatures and trust status
+- Extracts modification times, user information, and file metadata
+- **Output**: `Registry.csv`
 
-2. **Jumplist Parser**
-   - Parses Windows Jumplist files (`.automaticDestinations-ms` and `.customDestinations-ms`) from the current user.
-   - Extracts:
-     - File paths, arguments, icons, timestamps
-     - Signature verification and trust status
-   - Exports results to:
-     - `Automatic-Jumplists.csv`
-     - `Custom-Jumplists.csv`
+### 2. Process Scanner
+- Scans memory of all running processes for file references
+- Converts device paths to drive letters
+- Performs signature verification on referenced files
+- Identifies file modification times and existence status
+- **Output**: `ProcessMemoryScan_<timestamp>.csv`
 
-3. **Service Scanner**
-   - Enumerates Windows services (`PcaSvc`, `DiagTrack`, `WSearch`, `WinDefend`, `wuauserv`, `EventLog`, `Schedule`) and checks memory for files.
-   - Retrieves service PIDs and associates files found in memory with their source service.
+### 3. Jump List Parser
+- Analyzes Windows Jump Lists (.lnk files) from user profiles
+- Extracts file paths, titles, arguments, and working directories
+- Includes icon information and file metadata
+- Performs signature checks and trust verification
+- Calculates SHA256 hashes and file sizes
+- **Output**: `Jumplists.csv`
 
-4. **Registry Checks**
-   - Reads and parses important Windows registry entries for execution proof and file paths / existance of files
+### 4. Service Scanner
+- Checks the status of critical Windows services
+- Reports running/stopped/error states for key system services
+- **Output**: `Services.csv`
 
-5. **FiveM / GTAV Checks**
-   - Basic FiveM checks that look for Meta files in AI folder, D3D10.dll in plugins, Bigger Hitboxes x64a.rpf file in GTAV directory.
+### 5. PCA App Launch Parser
+- Parses Program Compatibility Assistant (PCA) data
+- Extracts application launch information and metadata
+- Includes file signatures, trust status, and timestamps
+- Calculates SHA256 hashes and file sizes
+- **Output**: `PcaAppLaunch.csv`
 
-6. **File Verification & Security**
-   - Checks digital signatures of all files discovered.
-   - Flags untrusted or unsigned files, even if a certificate exists but is not valid.
-   - Trusted files are valid Authenticode or catalog-signed files.
+### 6. Prefetch Analyzer
+- Analyzes Windows Prefetch files for system activity
+- Detects suspicious prefetch entries and deleted files
+- Checks prefetch registry settings
+- Performs multi-threaded analysis for performance
+- **Output**: `prefetch_analysis.csv`
+- **Note**: Requires administrator privileges
 
----
+### 7. Direct Finds Scanner
+- Uses YARA-like rules to scan specific directories
+- Targets FiveM and GTA V installation folders
+- Detects cheat files, mods, and suspicious modifications
+- Includes file metadata, signatures, and hash verification
+- **Output**: `DirectFinds.csv`
+
+### 8. Advanced Memory Scanner
+- Scans memory of specific processes and services
+- Targets: explorer.exe, PcaSvc (Program Compatibility Assistant), DPS (Diagnostic Policy Service), Dnscache
+- Detects cheat-related strings and patterns
+- Supports Unicode, Extended Unicode, and ASCII pattern matching
+- Uses multi-threaded scanning for performance
+- Minimum pattern length: 5 characters
+- **Note**: Integrated into the main scanning process
+
+## Requirements
+
+- Windows operating system
+- Visual Studio 2019 or later (for building)
+- Administrator privileges (recommended for full functionality)
+- C++17 compatible compiler
+
+## Building
+
+1. Open the `ForensicsScanner.vcxproj` file in Visual Studio
+2. Select the appropriate build configuration (Release recommended)
+3. Build the solution
+4. The executable will be generated in `x64/Release/ForensicsScanner.exe`
 
 ## Usage
 
-1. Run the compiled executable as **Administrator**.
-2. Open CSV files in Timeline Explorer, or any CSV reader for analysis.
+1. Run the executable as administrator for best results
+2. The tool will automatically perform all scans in sequence
+3. Progress is displayed in the console
+4. Results are saved to CSV files in the same directory as the executable
 
----
+### Command Line
+```
+ForensicsScanner.exe
+```
 
-## Notes
+The tool runs automatically and requires no command-line arguments.
 
-- **Administrator Privileges Required**: Full process and service scanning requires debug privileges.
-- **File Trust & Signature**:
-  - `Trusted`: Valid Authenticode / Catalog signature
-  - `Untrusted`: No signature or invalid certificate
-  - `Unsigned`: File without a certificate
-- **Registry & FiveM Checks**:
-  - Detects common cheat/bypass artifacts in GTAV/FiveM installations.
-  - Scans memory and service directories for suspicious files.
+## Output Files
 
----
+All results are exported to CSV files for easy analysis:
 
-## VirusTotal
+- `Registry.csv` - Registry analysis results
+- `ProcessMemoryScan_<timestamp>.csv` - Process memory scan results
+- `Jumplists.csv` - Jump list analysis results
+- `Services.csv` - Service status information
+- `PcaAppLaunch.csv` - PCA application launch data
+- `prefetch_analysis.csv` - Prefetch file analysis
+- `DirectFinds.csv` - Direct file scan results
 
-- The main executable has been checked on VirusTotal and is **100% clean**:  
-[VirusTotal Scan](https://www.virustotal.com/gui/file/5cf721f8d1fe885e1c3b6a7c93988ff4208e8c518b3f6b407b8c1a97347bd684?nocache=1)
+## Important Notes
 
----
+- **Administrator Privileges**: Some features (especially Prefetch Analyzer) require running as administrator
+- **Performance**: Memory scanning can be resource-intensive on systems with many processes
+- **False Positives**: Some detections may be legitimate system activity
+- **Legal Use**: This tool is intended for legitimate forensic analysis and anti-cheat purposes only
+
+## Detection Patterns
+
+The memory scanner includes extensive pattern matching for known cheats and suspicious activity, including:
+
+- File path detections (drive letters, specific directories)
+- Cheat engine signatures
+- Mod files and scripts
+- Bypass tools and spoofers
+- Network-related cheat indicators
+
+## Contributing
+
+This is a specialized forensics tool. Contributions should focus on:
+- Improving detection accuracy
+- Adding new forensic analysis methods
+- Performance optimizations
+- Cross-platform compatibility (if applicable)
 
 ## License
 
-- Open-source (MIT License recommended)
-- Free for personal and forensic use
+[Add your license information here]
+
+## Disclaimer
+
+This tool is provided for educational and legitimate forensic purposes. Users are responsible for complying with applicable laws and regulations when using this software.
