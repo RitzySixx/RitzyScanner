@@ -1,5 +1,4 @@
-#pragma once
-// JumpListParser.h
+// jumplistparser.h
 #pragma once
 #include <windows.h>
 #include <vector>
@@ -22,6 +21,8 @@ struct JumplistEntry {
     std::wstring entryType;
     std::wstring lnkPath;
     FILETIME jumplistTimestamp;
+    long long fileSize = -1; // New: File size in bytes
+    std::wstring sha256; // New: SHA256 hash hex
 };
 
 namespace JumpListParser {
@@ -31,5 +32,5 @@ namespace JumpListParser {
     std::wstring GetFileExtension(const std::wstring& path);
     std::string CheckFileSignature(const std::wstring& filePath);
     std::vector<JumplistEntry> ParseAllJumpLists();
-    void ExportToCSV(const std::vector<JumplistEntry>& entries, const std::wstring& outputPath, bool isCustom);
+    void ExportToCSV(const std::vector<JumplistEntry>& entries, const std::wstring& outputPath);
 }

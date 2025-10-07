@@ -20,6 +20,11 @@
 #include <atlbase.h>
 #include <comutil.h>
 #include <oleauto.h>
+#include <algorithm>
+#include <thread>
+#include <mutex>
+#include <vector>
+#include <set>
 
 #pragma comment(lib, "wintrust.lib")
 #pragma comment(lib, "crypt32.lib")
@@ -30,6 +35,8 @@
 #pragma comment(lib, "oleaut32.lib")
 
 namespace JumpListParser {
+    std::mutex entriesMutex;
+
     std::string WideToUTF8(const std::wstring& wstr) {
         if (wstr.empty()) return "";
         int size_needed = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
@@ -63,9 +70,15 @@ namespace JumpListParser {
     }
 
     std::string CheckFileSignature(const std::wstring& filePath) {
+        // Skip media files
+        std::wstring ext = GetFileExtension(filePath);
+        if (_wcsicmp(ext.c_str(), L".png") == 0 || _wcsicmp(ext.c_str(), L".mp3") == 0 || _wcsicmp(ext.c_str(), L".mp4") == 0) {
+            return "Skipped (Media File)";
+        }
+
         DWORD attrs = GetFileAttributesW(filePath.c_str());
         if (attrs == INVALID_FILE_ATTRIBUTES) {
-            return "Deleted"; // file missing
+            return "Deleted";
         }
 
         WINTRUST_FILE_INFO fileData = {};
@@ -83,7 +96,6 @@ namespace JumpListParser {
 
         LONG lStatus = WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
 
-        // Close state
         winTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
         WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
 
@@ -91,7 +103,6 @@ namespace JumpListParser {
             return "Valid (Authenticode)";
         }
 
-        // Check catalog signature
         HCATADMIN hCatAdmin;
         if (CryptCATAdminAcquireContext(&hCatAdmin, NULL, 0)) {
             HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
@@ -120,15 +131,14 @@ namespace JumpListParser {
     }
 
     std::string IsSignatureTrusted(const std::string& signatureStatus, const std::wstring& filePath) {
-        if (signatureStatus == "Deleted") {
-            return ""; // deleted → leave blank
+        if (signatureStatus == "Deleted" || signatureStatus == "Skipped (Media File)") {
+            return "";
         }
 
         if (signatureStatus == "Invalid" || signatureStatus == "Unsigned") {
-            return "Untrusted"; // no digital signature
+            return "Untrusted";
         }
 
-        // File is signed, verify trust
         WINTRUST_FILE_INFO fileInfo = {};
         fileInfo.cbStruct = sizeof(WINTRUST_FILE_INFO);
         fileInfo.pcwszFilePath = filePath.c_str();
@@ -147,11 +157,7 @@ namespace JumpListParser {
         winTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
         WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
 
-        if (lStatus == ERROR_SUCCESS) {
-            return "Trusted";
-        }
-
-        return "Untrusted";
+        return (lStatus == ERROR_SUCCESS) ? "Trusted" : "Untrusted";
     }
 
     std::wstring GetPropertyString(IPropertyStore* pPropStore, const PROPERTYKEY& key) {
@@ -168,20 +174,87 @@ namespace JumpListParser {
         return L"";
     }
 
-    std::vector<JumplistEntry> ParseShellLink(const std::wstring& lnkPath, const std::wstring& jumplistFile, const std::wstring& entryType) {
+    std::wstring ComputeSHA256(const std::wstring& filePath) {
+        std::wstring ext = GetFileExtension(filePath);
+        if (_wcsicmp(ext.c_str(), L".png") == 0 || _wcsicmp(ext.c_str(), L".mp3") == 0 || _wcsicmp(ext.c_str(), L".mp4") == 0) {
+            return L"Skipped (Media File)";
+        }
+
+        std::wstring hashStr = L"";
+        HCRYPTPROV hProv = 0;
+        HCRYPTHASH hHash = 0;
+        if (!CryptAcquireContext(&hProv, NULL, NULL, PROV_RSA_AES, CRYPT_VERIFYCONTEXT)) {
+            return hashStr;
+        }
+
+        if (!CryptCreateHash(hProv, CALG_SHA_256, 0, 0, &hHash)) {
+            CryptReleaseContext(hProv, 0);
+            return hashStr;
+        }
+
+        HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile == INVALID_HANDLE_VALUE) {
+            CryptDestroyHash(hHash);
+            CryptReleaseContext(hProv, 0);
+            return hashStr;
+        }
+
+        BYTE buffer[4096];
+        DWORD bytesRead;
+        while (ReadFile(hFile, buffer, sizeof(buffer), &bytesRead, NULL) && bytesRead > 0) {
+            if (!CryptHashData(hHash, buffer, bytesRead, 0)) {
+                CloseHandle(hFile);
+                CryptDestroyHash(hHash);
+                CryptReleaseContext(hProv, 0);
+                return hashStr;
+            }
+        }
+
+        CloseHandle(hFile);
+
+        DWORD hashSize = 32; // SHA256 is 256 bits = 32 bytes
+        BYTE hashBytes[32];
+        if (CryptGetHashParam(hHash, HP_HASHVAL, hashBytes, &hashSize, 0)) {
+            std::wstringstream ss;
+            for (DWORD i = 0; i < hashSize; ++i) {
+                ss << std::hex << std::setw(2) << std::setfill(L'0') << (int)hashBytes[i];
+            }
+            hashStr = ss.str();
+        }
+
+        CryptDestroyHash(hHash);
+        CryptReleaseContext(hProv, 0);
+        return hashStr;
+    }
+
+    std::vector<JumplistEntry> ParseShellLinkFromStream(const std::vector<BYTE>& streamData, const std::wstring& jumplistFile, const std::wstring& entryType) {
         std::vector<JumplistEntry> entries;
 
+        CComPtr<IPersistStream> pPersistStream;
         CComPtr<IShellLinkW> psl;
         if (FAILED(CoCreateInstance(CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, IID_IShellLinkW, (void**)&psl))) {
             return entries;
         }
 
-        CComPtr<IPersistFile> ppf;
-        if (FAILED(psl->QueryInterface(IID_IPersistFile, (void**)&ppf))) {
+        if (FAILED(psl->QueryInterface(IID_IPersistStream, (void**)&pPersistStream))) {
             return entries;
         }
 
-        if (FAILED(ppf->Load(lnkPath.c_str(), STGM_READ))) {
+        CComPtr<IStream> pStream;
+        if (FAILED(CreateStreamOnHGlobal(NULL, TRUE, &pStream))) {
+            return entries;
+        }
+
+        ULONG bytesWritten;
+        if (FAILED(pStream->Write(streamData.data(), (ULONG)streamData.size(), &bytesWritten))) {
+            return entries;
+        }
+
+        if (FAILED(pStream->Seek({ 0 }, STREAM_SEEK_SET, NULL))) {
+            return entries;
+        }
+
+        if (FAILED(pPersistStream->Load(pStream))) {
             return entries;
         }
 
@@ -193,7 +266,7 @@ namespace JumpListParser {
         JumplistEntry entry;
         entry.jumplistFile = jumplistFile;
         entry.entryType = entryType;
-        entry.lnkPath = lnkPath;
+        entry.lnkPath = L"In-Memory";
 
         wchar_t szPath[MAX_PATH] = { 0 };
         wchar_t szArguments[MAX_PATH] = { 0 };
@@ -223,37 +296,37 @@ namespace JumpListParser {
                     entry.accessTime = ftAccess;
                     entry.writeTime = ftWrite;
                 }
+                LARGE_INTEGER fileSize;
+                if (GetFileSizeEx(hFile, &fileSize)) {
+                    entry.fileSize = fileSize.QuadPart;
+                }
                 CloseHandle(hFile);
+
+                entry.sha256 = ComputeSHA256(entry.path);
+            }
+            else {
+                entry.fileSize = -1;
+                entry.sha256 = L"";
             }
         }
+        else {
+            entry.fileSize = -1;
+            entry.sha256 = L"";
+        }
 
-        HANDLE hFile = CreateFileW(jumplistFile.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-        if (hFile != INVALID_HANDLE_VALUE) {
+        HANDLE hJumplistFile = CreateFileW(jumplistFile.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+        if (hJumplistFile != INVALID_HANDLE_VALUE) {
             FILETIME ftCreate, ftAccess, ftWrite;
-            if (GetFileTime(hFile, &ftCreate, &ftAccess, &ftWrite)) {
+            if (GetFileTime(hJumplistFile, &ftCreate, &ftAccess, &ftWrite)) {
                 entry.jumplistTimestamp = ftWrite;
             }
-            CloseHandle(hFile);
+            CloseHandle(hJumplistFile);
         }
 
         if (!entry.path.empty()) {
-            // Check the file signature (Authenticode / Catalog / Deleted)
             std::string sigStatus = CheckFileSignature(entry.path);
             entry.signatureStatus = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(sigStatus);
-
-            // Determine trust
-            std::string trusted;
-            if (sigStatus == "Deleted") {
-                trusted = ""; // deleted → leave blank
-            }
-            else if (sigStatus == "Invalid" || sigStatus == "Unsigned") {
-                trusted = "Untrusted"; // no digital signature
-            }
-            else {
-                trusted = IsSignatureTrusted(sigStatus, entry.path); // signed → check trust
-            }
-
-            entry.trusted = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(trusted);
+            entry.trusted = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(IsSignatureTrusted(sigStatus, entry.path));
         }
         else {
             entry.signatureStatus = L"N/A";
@@ -264,37 +337,37 @@ namespace JumpListParser {
         return entries;
     }
 
-    std::vector<JumplistEntry> ParseAutomaticDestinations(const std::wstring& filePath) {
+    void ParseAutomaticDestinationsThread(const std::wstring& filePath, std::vector<JumplistEntry>& allEntries) {
         std::vector<JumplistEntry> entries;
 
         HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
         if (hFile == INVALID_HANDLE_VALUE) {
-            return entries;
+            return;
         }
 
         DWORD fileSize = GetFileSize(hFile, NULL);
-        if (fileSize == INVALID_FILE_SIZE) {
+        if (fileSize == INVALID_FILE_SIZE || fileSize > 100 * 1024 * 1024) { // Limit to 100MB
             CloseHandle(hFile);
-            return entries;
+            return;
         }
 
         std::vector<BYTE> buffer(fileSize);
         DWORD bytesRead;
         if (!ReadFile(hFile, buffer.data(), fileSize, &bytesRead, NULL)) {
             CloseHandle(hFile);
-            return entries;
+            return;
         }
         CloseHandle(hFile);
 
         CComPtr<IStorage> pStorage;
         if (FAILED(StgOpenStorageEx(filePath.c_str(), STGM_READ | STGM_SHARE_DENY_WRITE,
             STGFMT_STORAGE, 0, NULL, NULL, IID_IStorage, (void**)&pStorage))) {
-            return entries;
+            return;
         }
 
         CComPtr<IEnumSTATSTG> pEnum;
         if (FAILED(pStorage->EnumElements(0, NULL, 0, &pEnum))) {
-            return entries;
+            return;
         }
 
         STATSTG stat;
@@ -319,95 +392,64 @@ namespace JumpListParser {
 
             CComPtr<IStream> pStream;
             if (SUCCEEDED(pStorage->OpenStream(stat.pwcsName, NULL, STGM_READ | STGM_SHARE_EXCLUSIVE, 0, &pStream))) {
-                ULONG bytesRead = 0;
-                std::vector<BYTE> streamBuffer(stat.cbSize.LowPart);
-                if (SUCCEEDED(pStream->Read(streamBuffer.data(), stat.cbSize.LowPart, &bytesRead))) {
-                    wchar_t tempPath[MAX_PATH];
-                    GetTempPathW(MAX_PATH, tempPath);
-                    wchar_t tempFile[MAX_PATH];
-                    GetTempFileNameW(tempPath, L"jmp", 0, tempFile);
-
-                    HANDLE hTempFile = CreateFileW(tempFile, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-                    if (hTempFile != INVALID_HANDLE_VALUE) {
-                        DWORD bytesWritten;
-                        WriteFile(hTempFile, streamBuffer.data(), bytesRead, &bytesWritten, NULL);
-                        CloseHandle(hTempFile);
-
-                        auto streamEntries = ParseShellLink(tempFile, filePath, L"Automatic");
-                        entries.insert(entries.end(), streamEntries.begin(), streamEntries.end());
-                        DeleteFileW(tempFile);
+                STATSTG streamStat;
+                if (SUCCEEDED(pStream->Stat(&streamStat, STATFLAG_DEFAULT)) && streamStat.cbSize.QuadPart < 10 * 1024 * 1024) { // Limit to 10MB per stream
+                    std::vector<BYTE> streamBuffer(streamStat.cbSize.LowPart);
+                    ULONG bytesReadStream;
+                    if (SUCCEEDED(pStream->Read(streamBuffer.data(), streamStat.cbSize.LowPart, &bytesReadStream))) {
+                        auto streamEntries = ParseShellLinkFromStream(streamBuffer, filePath, L"Automatic");
+                        std::lock_guard<std::mutex> lock(entriesMutex);
+                        allEntries.insert(allEntries.end(), streamEntries.begin(), streamEntries.end());
                     }
                 }
             }
 
             CoTaskMemFree(stat.pwcsName);
         }
-
-        return entries;
     }
 
-    std::vector<JumplistEntry> ParseCustomDestinations(const std::wstring& filePath) {
+    void ParseCustomDestinationsThread(const std::wstring& filePath, std::vector<JumplistEntry>& allEntries) {
         std::vector<JumplistEntry> entries;
 
         HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
         if (hFile == INVALID_HANDLE_VALUE) {
-            return entries;
+            return;
         }
 
         DWORD fileSize = GetFileSize(hFile, NULL);
-        if (fileSize == INVALID_FILE_SIZE) {
+        if (fileSize == INVALID_FILE_SIZE || fileSize > 100 * 1024 * 1024) { // Limit to 100MB
             CloseHandle(hFile);
-            return entries;
+            return;
         }
 
         std::vector<BYTE> buffer(fileSize);
         DWORD bytesRead;
         if (!ReadFile(hFile, buffer.data(), fileSize, &bytesRead, NULL)) {
             CloseHandle(hFile);
-            return entries;
+            return;
         }
         CloseHandle(hFile);
 
+        const BYTE pattern[] = { 0x4C, 0x00, 0x00, 0x00 };
         size_t offset = 0;
         while (offset < buffer.size()) {
-            if (offset + 0x4C > buffer.size()) break;
+            auto start_it = std::search(buffer.begin() + offset, buffer.end(), pattern, pattern + sizeof(pattern));
+            if (start_it == buffer.end()) break;
 
-            if (buffer[offset] == 0x4C && buffer[offset + 1] == 0x00 &&
-                buffer[offset + 2] == 0x00 && buffer[offset + 3] == 0x00) {
+            size_t header_pos = start_it - buffer.begin();
+            auto end_it = std::search(start_it + sizeof(pattern), buffer.end(), pattern, pattern + sizeof(pattern));
+            size_t next_pos = (end_it != buffer.end()) ? end_it - buffer.begin() : buffer.size();
 
-                size_t nextOffset = offset + 0x4C;
-                while (nextOffset + 4 < buffer.size()) {
-                    if (buffer[nextOffset] == 0x4C && buffer[nextOffset + 1] == 0x00 &&
-                        buffer[nextOffset + 2] == 0x00 && buffer[nextOffset + 3] == 0x00) {
-                        break;
-                    }
-                    nextOffset++;
-                }
-
-                wchar_t tempPath[MAX_PATH];
-                GetTempPathW(MAX_PATH, tempPath);
-                wchar_t tempFile[MAX_PATH];
-                GetTempFileNameW(tempPath, L"jmp", 0, tempFile);
-
-                HANDLE hTempFile = CreateFileW(tempFile, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-                if (hTempFile != INVALID_HANDLE_VALUE) {
-                    DWORD bytesWritten;
-                    WriteFile(hTempFile, &buffer[offset], (DWORD)(nextOffset - offset), &bytesWritten, NULL);
-                    CloseHandle(hTempFile);
-
-                    auto streamEntries = ParseShellLink(tempFile, filePath, L"Custom");
-                    entries.insert(entries.end(), streamEntries.begin(), streamEntries.end());
-                    DeleteFileW(tempFile);
-                }
-
-                offset = nextOffset;
+            size_t chunk_size = next_pos - header_pos;
+            if (chunk_size > 0 && chunk_size < 10 * 1024 * 1024) { // Limit to 10MB per chunk
+                std::vector<BYTE> chunk(buffer.begin() + header_pos, buffer.begin() + header_pos + chunk_size);
+                auto streamEntries = ParseShellLinkFromStream(chunk, filePath, L"Custom");
+                std::lock_guard<std::mutex> lock(entriesMutex);
+                allEntries.insert(allEntries.end(), streamEntries.begin(), streamEntries.end());
             }
-            else {
-                offset++;
-            }
+
+            offset = next_pos;
         }
-
-        return entries;
     }
 
     std::vector<std::wstring> FindJumplistFiles() {
@@ -450,53 +492,39 @@ namespace JumpListParser {
         return path;
     }
 
-    void ExportToCSV(const std::vector<JumplistEntry>& entries, const std::wstring& outputPath, bool isCustom) {
+    void ExportToCSV(const std::vector<JumplistEntry>& entries, const std::wstring& outputPath) {
         std::ofstream csvFile(outputPath);
         if (!csvFile.is_open()) {
             std::wcerr << L"Failed to create output file: " << outputPath << std::endl;
             return;
         }
 
-        if (isCustom) {
-            csvFile << "Jumplist Timestamp,Creation Time,Access Time,Write Time,Name,Title,Path,Signature,Trusted,Arguments,Icon Path,Jumplist File,Entry Type,Lnk Path\n";
-        }
-        else {
-            csvFile << "Jumplist Timestamp,Creation Time,Access Time,Write Time,Name,Path,Signature,Trusted,Jumplist File,Entry Type,Lnk Path\n";
-        }
+        csvFile << "Creation Time,Access Time,Write Time,Name,Path,Signature,Trusted,SHA256,File Size,Jumplist File,Entry Type,Lnk Path,Jumplist Timestamp,Title,AppID,Arguments,Working Dir,Icon Path,Icon Index\n";
 
         for (const auto& entry : entries) {
             std::wstring fileName = GetFileNameFromPath(entry.path);
             std::wstring fileExt = GetFileExtension(entry.path);
+            std::wstring fileSizeStr = (entry.fileSize >= 0) ? std::to_wstring(entry.fileSize) : L"N/A";
 
-            if (isCustom) {
-                csvFile << "\"" << WideToUTF8(GetSystemTimeString(entry.jumplistTimestamp)) << "\","
-                    << "\"" << WideToUTF8(GetSystemTimeString(entry.creationTime)) << "\","
-                    << "\"" << WideToUTF8(GetSystemTimeString(entry.accessTime)) << "\","
-                    << "\"" << WideToUTF8(GetSystemTimeString(entry.writeTime)) << "\","
-                    << "\"" << WideToUTF8(fileName) << "\","
-                    << "\"" << WideToUTF8(entry.title) << "\","
-                    << "\"" << WideToUTF8(entry.path) << "\","
-                    << "\"" << WideToUTF8(entry.signatureStatus) << "\","
-                    << "\"" << WideToUTF8(entry.trusted) << "\","
-                    << "\"" << WideToUTF8(entry.arguments) << "\","
-                    << "\"" << WideToUTF8(entry.iconPath) << "\","
-                    << "\"" << WideToUTF8(entry.jumplistFile) << "\","
-                    << "\"" << WideToUTF8(entry.entryType) << "\","
-                    << "\"" << WideToUTF8(entry.lnkPath) << "\"\n";
-            }
-            else {
-                csvFile << "\"" << WideToUTF8(GetSystemTimeString(entry.jumplistTimestamp)) << "\","
-                    << "\"" << WideToUTF8(GetSystemTimeString(entry.creationTime)) << "\","
-                    << "\"" << WideToUTF8(GetSystemTimeString(entry.accessTime)) << "\","
-                    << "\"" << WideToUTF8(GetSystemTimeString(entry.writeTime)) << "\","
-                    << "\"" << WideToUTF8(fileName) << "\","
-                    << "\"" << WideToUTF8(entry.path) << "\","
-                    << "\"" << WideToUTF8(entry.signatureStatus) << "\","
-                    << "\"" << WideToUTF8(entry.trusted) << "\","
-                    << "\"" << WideToUTF8(entry.jumplistFile) << "\","
-                    << "\"" << WideToUTF8(entry.entryType) << "\","
-                    << "\"" << WideToUTF8(entry.lnkPath) << "\"\n";
-            }
+            csvFile << "\"" << WideToUTF8(GetSystemTimeString(entry.creationTime)) << "\","
+                << "\"" << WideToUTF8(GetSystemTimeString(entry.accessTime)) << "\","
+                << "\"" << WideToUTF8(GetSystemTimeString(entry.writeTime)) << "\","
+                << "\"" << WideToUTF8(fileName) << "\","
+                << "\"" << WideToUTF8(entry.path) << "\","
+                << "\"" << WideToUTF8(entry.signatureStatus) << "\","
+                << "\"" << WideToUTF8(entry.trusted) << "\","
+                << "\"" << WideToUTF8(entry.sha256) << "\","
+                << "\"" << WideToUTF8(fileSizeStr) << "\","
+                << "\"" << WideToUTF8(entry.jumplistFile) << "\","
+                << "\"" << WideToUTF8(entry.entryType) << "\","
+                << "\"" << WideToUTF8(entry.lnkPath) << "\","
+                << "\"" << WideToUTF8(GetSystemTimeString(entry.jumplistTimestamp)) << "\","
+                << "\"" << WideToUTF8(entry.title) << "\","
+                << "\"" << WideToUTF8(entry.appId) << "\","
+                << "\"" << WideToUTF8(entry.arguments) << "\","
+                << "\"" << WideToUTF8(entry.workingDir) << "\","
+                << "\"" << WideToUTF8(entry.iconPath) << "\","
+                << entry.iconIndex << "\n";
         }
 
         csvFile.close();
@@ -505,7 +533,7 @@ namespace JumpListParser {
 
     std::vector<JumplistEntry> ParseAllJumpLists() {
         std::vector<JumplistEntry> allEntries;
-        CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+        CoInitializeEx(NULL, COINIT_MULTITHREADED); // Use multi-threaded COM model
 
         std::vector<std::wstring> jumplistFiles = FindJumplistFiles();
         if (jumplistFiles.empty()) {
@@ -514,40 +542,42 @@ namespace JumpListParser {
             return allEntries;
         }
 
-        // Blue for checking each jumplist file
-        for (const auto& jumplistFile : jumplistFiles) {
-            // Set blue text
-            SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), 9);
-            std::wcout << L"Checking jumplist: " << jumplistFile << L" ...\n";
-            // Reset color
-            SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), 7);
+        std::vector<std::thread> threads;
+        unsigned int threadCount = (std::max)(1U, std::thread::hardware_concurrency());
+        size_t batchSize = std::max<size_t>(1, jumplistFiles.size() / threadCount);
 
-            if (jumplistFile.find(L".automaticDestinations-ms") != std::wstring::npos) {
-                auto entries = ParseAutomaticDestinations(jumplistFile);
-                allEntries.insert(allEntries.end(), entries.begin(), entries.end());
+        for (size_t i = 0; i < jumplistFiles.size(); i += batchSize) {
+            size_t endIndex = std::min<size_t>(i + batchSize, jumplistFiles.size());
+            for (size_t j = i; j < endIndex; ++j) {
+                const std::wstring& file = jumplistFiles[j];
+                if (file.find(L".automaticDestinations-ms") != std::wstring::npos) {
+                    threads.emplace_back(ParseAutomaticDestinationsThread, file, std::ref(allEntries));
+                }
+                else if (file.find(L".customDestinations-ms") != std::wstring::npos) {
+                    threads.emplace_back(ParseCustomDestinationsThread, file, std::ref(allEntries));
+                }
             }
-            else if (jumplistFile.find(L".customDestinations-ms") != std::wstring::npos) {
-                auto entries = ParseCustomDestinations(jumplistFile);
-                allEntries.insert(allEntries.end(), entries.begin(), entries.end());
+        }
+
+        for (auto& t : threads) {
+            t.join();
+        }
+
+        // Deduplicate by path
+        std::set<std::string> seenPaths;
+        std::vector<JumplistEntry> uniqueEntries;
+        for (const auto& entry : allEntries) {
+            std::string path = WideToUTF8(entry.path);
+            if (seenPaths.find(path) == seenPaths.end()) {
+                seenPaths.insert(path);
+                uniqueEntries.push_back(entry);
             }
         }
 
         std::wstring outputDir = GetModuleDirectory();
-        std::wstring automaticOutputPath = outputDir + L"\\Automatic-Jumplists.csv";
-        std::wstring customOutputPath = outputDir + L"\\Custom-Jumplists.csv";
+        std::wstring jumplistOutputPath = outputDir + L"\\Jumplists.csv";
 
-        std::vector<JumplistEntry> automaticEntries, customEntries;
-        for (const auto& entry : allEntries) {
-            if (entry.entryType == L"Automatic") {
-                automaticEntries.push_back(entry);
-            }
-            else {
-                customEntries.push_back(entry);
-            }
-        }
-
-        ExportToCSV(automaticEntries, automaticOutputPath, false);
-        ExportToCSV(customEntries, customOutputPath, true);
+        ExportToCSV(uniqueEntries, jumplistOutputPath);
 
         CoUninitialize();
         return allEntries;

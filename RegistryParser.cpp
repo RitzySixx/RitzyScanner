@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <map>
 #include <vector>
+#include <set>
 
 #pragma comment(lib, "wintrust.lib")
 #pragma comment(lib, "crypt32.lib")
@@ -557,24 +558,31 @@ namespace RegistryParser {
             return entries;
         }
 
-        // Parse and export separately
+        // Parse all entries
         auto bamEntries = ParseBAMKeys();
-        ExportToCSV(bamEntries, "BAM.csv");
-
         auto compatEntries = ParseCompatibilityAssistant();
-        ExportToCSV(compatEntries, "CompatibilityAssistant.csv");
-
         auto muiCacheEntries = ParseMuiCache("Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache");
-        ExportToCSV(muiCacheEntries, "MuiCache.csv");
-
         auto shellNoRoamEntries = ParseMuiCache("Software\\Microsoft\\Windows\\ShellNoRoam\\MUICache");
-        ExportToCSV(shellNoRoamEntries, "ShellNoRoamMUICache.csv");
 
-        // Combine for overall entries if needed, but since separate CSVs are requested, no single export
-        entries.insert(entries.end(), bamEntries.begin(), bamEntries.end());
-        entries.insert(entries.end(), compatEntries.begin(), compatEntries.end());
-        entries.insert(entries.end(), muiCacheEntries.begin(), muiCacheEntries.end());
-        entries.insert(entries.end(), shellNoRoamEntries.begin(), shellNoRoamEntries.end());
+        // Combine all entries
+        std::vector<RegistryEntry> allEntries;
+        allEntries.insert(allEntries.end(), bamEntries.begin(), bamEntries.end());
+        allEntries.insert(allEntries.end(), compatEntries.begin(), compatEntries.end());
+        allEntries.insert(allEntries.end(), muiCacheEntries.begin(), muiCacheEntries.end());
+        allEntries.insert(allEntries.end(), shellNoRoamEntries.begin(), shellNoRoamEntries.end());
+
+        // Deduplicate by path
+        std::set<std::string> seenPaths;
+        std::vector<RegistryEntry> uniqueEntries;
+        for (const auto& entry : allEntries) {
+            if (seenPaths.find(entry.path) == seenPaths.end()) {
+                seenPaths.insert(entry.path);
+                uniqueEntries.push_back(entry);
+            }
+        }
+
+        // Export to combined CSV
+        ExportToCSV(uniqueEntries, "Registry.csv");
 
         return entries;
     }
