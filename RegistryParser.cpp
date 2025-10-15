@@ -1,4 +1,5 @@
 #include "RegistryParser.h"
+#include "EnhancedLogger.h"
 #include <wincrypt.h>
 #include <wintrust.h>
 #include <sstream>
@@ -317,6 +318,41 @@ namespace RegistryParser {
                 "HKCU\\" + keyPath,
                 "CompatibilityAssistant"
                 });
+
+            // Enhanced logging for problematic entries
+            if (EnhancedLogger::IsProblematicEntry(signature, trusted)) {
+                std::string issueType;
+                if (signature == "Deleted") {
+                    issueType = "DELETED";
+                } else if (signature == "Invalid" || trusted == "Untrusted") {
+                    issueType = "INVALID_SIGNATURE";
+                } else if (trusted == "Unsigned") {
+                    issueType = "UNSIGNED";
+                } else {
+                    issueType = "UNTRUSTED";
+                }
+
+                if (!EnhancedLogger::IsDuplicateEntry(path, issueType)) {
+                    EnhancedLogger::DetailedLogEntry logEntry;
+                    logEntry.timestamp = EnhancedLogger::GetCurrentTimestamp();
+                    logEntry.scanType = "Registry";
+                    logEntry.source = "CompatibilityAssistant";
+                    logEntry.filePath = path;
+                    logEntry.issueType = issueType;
+                    logEntry.signatureStatus = signature;
+                    logEntry.trustedStatus = trusted;
+                    logEntry.fileSize = (signature != "Deleted") ? EnhancedLogger::GetFileSize(path) : "N/A";
+                    logEntry.modificationTime = modTime;
+                    logEntry.md5Hash = (signature != "Deleted") ? EnhancedLogger::CalculateFileHash(path, "MD5") : "N/A";
+                    logEntry.sha256Hash = (signature != "Deleted") ? EnhancedLogger::CalculateFileHash(path, "SHA256") : "N/A";
+                    logEntry.additionalInfo = (signature != "Deleted") ? EnhancedLogger::GetDetailedFileInfo(path) : "File Deleted";
+                    logEntry.fileExists = (signature != "Deleted");
+                    logEntry.sourcePID = 0;
+
+                    EnhancedLogger::LogProblematicEntry(logEntry);
+                    EnhancedLogger::AddToGlobalTracking(path, issueType);
+                }
+            }
         }
 
         RegCloseKey(hKey);
@@ -382,6 +418,41 @@ namespace RegistryParser {
                 "HKCU\\" + keyPath,
                 "MuiCache"
                 });
+
+            // Enhanced logging for problematic entries
+            if (EnhancedLogger::IsProblematicEntry(signature, trusted)) {
+                std::string issueType;
+                if (signature == "Deleted") {
+                    issueType = "DELETED";
+                } else if (signature == "Invalid" || trusted == "Untrusted") {
+                    issueType = "INVALID_SIGNATURE";
+                } else if (trusted == "Unsigned") {
+                    issueType = "UNSIGNED";
+                } else {
+                    issueType = "UNTRUSTED";
+                }
+
+                if (!EnhancedLogger::IsDuplicateEntry(path, issueType)) {
+                    EnhancedLogger::DetailedLogEntry logEntry;
+                    logEntry.timestamp = EnhancedLogger::GetCurrentTimestamp();
+                    logEntry.scanType = "Registry";
+                    logEntry.source = "MuiCache";
+                    logEntry.filePath = path;
+                    logEntry.issueType = issueType;
+                    logEntry.signatureStatus = signature;
+                    logEntry.trustedStatus = trusted;
+                    logEntry.fileSize = (signature != "Deleted") ? EnhancedLogger::GetFileSize(path) : "N/A";
+                    logEntry.modificationTime = modTime;
+                    logEntry.md5Hash = (signature != "Deleted") ? EnhancedLogger::CalculateFileHash(path, "MD5") : "N/A";
+                    logEntry.sha256Hash = (signature != "Deleted") ? EnhancedLogger::CalculateFileHash(path, "SHA256") : "N/A";
+                    logEntry.additionalInfo = (signature != "Deleted") ? EnhancedLogger::GetDetailedFileInfo(path) : "File Deleted";
+                    logEntry.fileExists = (signature != "Deleted");
+                    logEntry.sourcePID = 0;
+
+                    EnhancedLogger::LogProblematicEntry(logEntry);
+                    EnhancedLogger::AddToGlobalTracking(path, issueType);
+                }
+            }
         }
 
         RegCloseKey(hKey);
@@ -502,6 +573,41 @@ namespace RegistryParser {
                             "HKLM\\" + bamPath,
                             "BAM"
                             });
+
+                        // Enhanced logging for problematic entries
+                        if (EnhancedLogger::IsProblematicEntry(signature, trusted)) {
+                            std::string issueType;
+                            if (signature == "Deleted") {
+                                issueType = "DELETED";
+                            } else if (signature == "Invalid" || trusted == "Untrusted") {
+                                issueType = "INVALID_SIGNATURE";
+                            } else if (trusted == "Unsigned") {
+                                issueType = "UNSIGNED";
+                            } else {
+                                issueType = "UNTRUSTED";
+                            }
+
+                            if (!EnhancedLogger::IsDuplicateEntry(path, issueType)) {
+                                EnhancedLogger::DetailedLogEntry logEntry;
+                                logEntry.timestamp = EnhancedLogger::GetCurrentTimestamp();
+                                logEntry.scanType = "Registry";
+                                logEntry.source = "BAM";
+                                logEntry.filePath = path;
+                                logEntry.issueType = issueType;
+                                logEntry.signatureStatus = signature;
+                                logEntry.trustedStatus = trusted;
+                                logEntry.fileSize = (signature != "Deleted") ? EnhancedLogger::GetFileSize(path) : "N/A";
+                                logEntry.modificationTime = modTime;
+                                logEntry.md5Hash = (signature != "Deleted") ? EnhancedLogger::CalculateFileHash(path, "MD5") : "N/A";
+                                logEntry.sha256Hash = (signature != "Deleted") ? EnhancedLogger::CalculateFileHash(path, "SHA256") : "N/A";
+                                logEntry.additionalInfo = (signature != "Deleted") ? EnhancedLogger::GetDetailedFileInfo(path) : "File Deleted";
+                                logEntry.fileExists = (signature != "Deleted");
+                                logEntry.sourcePID = 0;
+
+                                EnhancedLogger::LogProblematicEntry(logEntry);
+                                EnhancedLogger::AddToGlobalTracking(path, issueType);
+                            }
+                        }
                     }
                 }
 

@@ -1,4 +1,5 @@
 #include "ProcessScanner.h"
+#include "EnhancedLogger.h"
 #include <iostream>
 #include <wincrypt.h>
 #include <wintrust.h>
@@ -474,6 +475,41 @@ namespace ProcessScanner {
                         info.sourceProcess = service;
                         info.sourcePID = pid;
                         allFileInfo.push_back(info);
+
+                        // Enhanced logging for problematic entries
+                        if (EnhancedLogger::IsProblematicEntry(info.signatureStatus, info.trusted)) {
+                            std::string issueType;
+                            if (info.signatureStatus == "DELETED") {
+                                issueType = "DELETED";
+                            } else if (info.signatureStatus == "Invalid" || info.trusted == "Untrusted") {
+                                issueType = "INVALID_SIGNATURE";
+                            } else if (info.trusted == "Unsigned") {
+                                issueType = "UNSIGNED";
+                            } else {
+                                issueType = "UNTRUSTED";
+                            }
+
+                            if (!EnhancedLogger::IsDuplicateEntry(path, issueType)) {
+                                EnhancedLogger::DetailedLogEntry logEntry;
+                                logEntry.timestamp = EnhancedLogger::GetCurrentTimestamp();
+                                logEntry.scanType = "ProcessMemory";
+                                logEntry.source = "Service: " + service;
+                                logEntry.filePath = path;
+                                logEntry.issueType = issueType;
+                                logEntry.signatureStatus = info.signatureStatus;
+                                logEntry.trustedStatus = info.trusted;
+                                logEntry.fileSize = info.fileExists ? EnhancedLogger::GetFileSize(path) : "N/A";
+                                logEntry.modificationTime = info.modTime;
+                                logEntry.md5Hash = info.fileExists ? EnhancedLogger::CalculateFileHash(path, "MD5") : "N/A";
+                                logEntry.sha256Hash = info.fileExists ? EnhancedLogger::CalculateFileHash(path, "SHA256") : "N/A";
+                                logEntry.additionalInfo = EnhancedLogger::GetDetailedFileInfo(path);
+                                logEntry.fileExists = info.fileExists;
+                                logEntry.sourcePID = pid;
+
+                                EnhancedLogger::LogProblematicEntry(logEntry);
+                                EnhancedLogger::AddToGlobalTracking(path, issueType);
+                            }
+                        }
                     }
                 }
             }
@@ -519,6 +555,41 @@ namespace ProcessScanner {
                         info.sourceProcess = displayName;
                         info.sourcePID = pid;
                         allFileInfo.push_back(info);
+
+                        // Enhanced logging for problematic entries
+                        if (EnhancedLogger::IsProblematicEntry(info.signatureStatus, info.trusted)) {
+                            std::string issueType;
+                            if (info.signatureStatus == "DELETED") {
+                                issueType = "DELETED";
+                            } else if (info.signatureStatus == "Invalid" || info.trusted == "Untrusted") {
+                                issueType = "INVALID_SIGNATURE";
+                            } else if (info.trusted == "Unsigned") {
+                                issueType = "UNSIGNED";
+                            } else {
+                                issueType = "UNTRUSTED";
+                            }
+
+                            if (!EnhancedLogger::IsDuplicateEntry(path, issueType)) {
+                                EnhancedLogger::DetailedLogEntry logEntry;
+                                logEntry.timestamp = EnhancedLogger::GetCurrentTimestamp();
+                                logEntry.scanType = "ProcessMemory";
+                                logEntry.source = "Process: " + displayName;
+                                logEntry.filePath = path;
+                                logEntry.issueType = issueType;
+                                logEntry.signatureStatus = info.signatureStatus;
+                                logEntry.trustedStatus = info.trusted;
+                                logEntry.fileSize = info.fileExists ? EnhancedLogger::GetFileSize(path) : "N/A";
+                                logEntry.modificationTime = info.modTime;
+                                logEntry.md5Hash = info.fileExists ? EnhancedLogger::CalculateFileHash(path, "MD5") : "N/A";
+                                logEntry.sha256Hash = info.fileExists ? EnhancedLogger::CalculateFileHash(path, "SHA256") : "N/A";
+                                logEntry.additionalInfo = EnhancedLogger::GetDetailedFileInfo(path);
+                                logEntry.fileExists = info.fileExists;
+                                logEntry.sourcePID = pid;
+
+                                EnhancedLogger::LogProblematicEntry(logEntry);
+                                EnhancedLogger::AddToGlobalTracking(path, issueType);
+                            }
+                        }
                     }
                 }
             }

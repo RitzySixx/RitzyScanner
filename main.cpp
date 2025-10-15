@@ -6,9 +6,15 @@
 #include "PcaAppLaunch.h"
 #include "DirectFinds.h"
 #include "PrefetchAnalyzer.h"
+#include "EnhancedLogger.h"
 
 int main() {
-    std::cout << "=== Starting Forensic Scanner ===\n";
+    std::cout << "=== Starting Enhanced Forensic Scanner ===\n";
+
+    // Initialize enhanced logging system
+    EnhancedLogger::InitializeGlobalTracking();
+    std::cout << "Enhanced logging system initialized for problematic entries only\n";
+
     // Run Registry Parser
     std::cout << "\n[1/6] Running Registry Parser...\n";
     auto registryResults = RegistryParser::ParseAllRegistry();
@@ -42,7 +48,7 @@ int main() {
     std::cout << "\n[7/7] Running Direct Finds Scanner (checking FiveM and GTA V folders)...\n";
     auto directResults = DirectFinds::ScanDirectFinds();
     std::cout << " Found " << directResults.size() << " direct findings\n";
-    std::cout << "\n=== Forensic Scan Complete ===\n";
+    std::cout << "\n=== Enhanced Forensic Scan Complete ===\n";
     std::cout << "Results saved to:\n";
     std::cout << " - Registry.csv\n";
     std::cout << " - ProcessMemoryScan_<timestamp>.csv\n";
@@ -51,6 +57,9 @@ int main() {
     std::cout << " - PcaAppLaunch.csv\n";
     std::cout << " - prefetch_analysis.csv\n";
     std::cout << " - DirectFinds.csv\n";
+    std::cout << "\nEnhanced Logging:\n";
+    std::cout << " - Problematic entries logged to SentryX server\n";
+    std::cout << " - Detailed local logs available in current directory\n";
     system("pause");
     return 0;
 }
