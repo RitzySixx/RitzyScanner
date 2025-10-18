@@ -22,6 +22,10 @@ using std::endl;
 #pragma comment(lib, "crypt32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "version.lib")
+
+// Optimized Process Memory Scanner
+// Ultra-fast file path detection with chunked processing
 
 namespace ProcessScanner {
     void SetConsoleColor(WORD color) {
@@ -68,132 +72,16 @@ namespace ProcessScanner {
     }
 
     std::string CheckFileSignature(const std::string& filePath) {
-        WINTRUST_FILE_INFO fileData;
-        memset(&fileData, 0, sizeof(fileData));
-        fileData.cbStruct = sizeof(WINTRUST_FILE_INFO);
-        fileData.pcwszFilePath = std::wstring(filePath.begin(), filePath.end()).c_str();
-        fileData.hFile = NULL;
-        fileData.pgKnownSubject = NULL;
-
-        GUID WVTPolicyGUID = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-        WINTRUST_DATA winTrustData;
-        memset(&winTrustData, 0, sizeof(winTrustData));
-        winTrustData.cbStruct = sizeof(winTrustData);
-        winTrustData.pPolicyCallbackData = NULL;
-        winTrustData.pSIPClientData = NULL;
-        winTrustData.dwUIChoice = WTD_UI_NONE;
-        winTrustData.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
-        winTrustData.dwUnionChoice = WTD_CHOICE_FILE;
-        winTrustData.dwStateAction = WTD_STATEACTION_VERIFY;
-        winTrustData.hWVTStateData = NULL;
-        winTrustData.pwszURLReference = NULL;
-        winTrustData.dwProvFlags = WTD_REVOCATION_CHECK_CHAIN |
-            WTD_HASH_ONLY_FLAG |
-            WTD_USE_DEFAULT_OSVER_CHECK |
-            WTD_LIFETIME_SIGNING_FLAG |
-            WTD_CACHE_ONLY_URL_RETRIEVAL;
-        winTrustData.pFile = &fileData;
-
-        LONG lStatus = WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
-
-        if (lStatus == ERROR_SUCCESS) {
-            winTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
-            WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
-            return "Valid (Authenticode)";
-        }
-
-        HCATADMIN hCatAdmin;
-        if (CryptCATAdminAcquireContext(&hCatAdmin, NULL, 0)) {
-            HANDLE hFile = CreateFileA(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-            if (hFile != INVALID_HANDLE_VALUE) {
-                DWORD dwHashSize;
-                if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, NULL, 0)) {
-                    BYTE* pbHash = new BYTE[dwHashSize];
-                    if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, pbHash, 0)) {
-                        CATALOG_INFO catalogInfo;
-                        memset(&catalogInfo, 0, sizeof(catalogInfo));
-                        catalogInfo.cbStruct = sizeof(catalogInfo);
-
-                        HCATINFO hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, pbHash, dwHashSize, 0, NULL);
-                        if (hCatInfo) {
-                            CryptCATCatalogInfoFromContext(hCatInfo, &catalogInfo, 0);
-                            CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0);
-                            delete[] pbHash;
-                            CloseHandle(hFile);
-                            CryptCATAdminReleaseContext(hCatAdmin, 0);
-                            return "Valid (Catalog)";
-                        }
-                    }
-                    delete[] pbHash;
-                }
-                CloseHandle(hFile);
-            }
-            CryptCATAdminReleaseContext(hCatAdmin, 0);
-        }
-
-        return "Invalid";
+        return EnhancedLogger::CheckFileSignatureUnified(filePath);
     }
 
-    std::string IsSignatureTrusted(std::string& signatureStatus, const std::string& filePath)
-    {
-        LONG lStatus;
-        GUID policyGUID = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-
-        WINTRUST_FILE_INFO fileInfo = {};
-        fileInfo.cbStruct = sizeof(WINTRUST_FILE_INFO);
-        std::wstring wFilePath(filePath.begin(), filePath.end());
-        fileInfo.pcwszFilePath = wFilePath.c_str();
-
-        WINTRUST_DATA winTrustData = {};
-        winTrustData.cbStruct = sizeof(winTrustData);
-        winTrustData.dwUIChoice = WTD_UI_NONE;
-        winTrustData.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
-        winTrustData.dwUnionChoice = WTD_CHOICE_FILE;
-        winTrustData.dwStateAction = 0;
-        winTrustData.pFile = &fileInfo;
-
-        lStatus = WinVerifyTrust(NULL, &policyGUID, &winTrustData);
-
-        if (lStatus == ERROR_SUCCESS) {
-            return "Trusted";
-        }
-        else if (lStatus == TRUST_E_NOSIGNATURE) {
-            // Check catalog if no Authenticode signature
-            HCATADMIN hCatAdmin;
-            if (CryptCATAdminAcquireContext(&hCatAdmin, NULL, 0)) {
-                HANDLE hFile = CreateFileA(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-                if (hFile != INVALID_HANDLE_VALUE) {
-                    DWORD dwHashSize;
-                    if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, NULL, 0)) {
-                        BYTE* pbHash = new BYTE[dwHashSize];
-                        if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, pbHash, 0)) {
-                            HCATINFO hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, pbHash, dwHashSize, 0, NULL);
-                            if (hCatInfo) {
-                                CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0);
-                                delete[] pbHash;
-                                CloseHandle(hFile);
-                                CryptCATAdminReleaseContext(hCatAdmin, 0);
-                                signatureStatus = "Valid (Catalog)";
-                                return "Trusted";
-                            }
-                        }
-                        delete[] pbHash;
-                    }
-                    CloseHandle(hFile);
-                }
-                CryptCATAdminReleaseContext(hCatAdmin, 0);
-            }
-
-            signatureStatus = "Unsigned";
-            return "Unsigned";
-        }
-        else {
-            signatureStatus = "Invalid";
-            return "Untrusted";
-        }
+    std::string IsSignatureTrusted(std::string& signatureStatus, const std::string& filePath) {
+        return EnhancedLogger::CheckFileTrustUnified(filePath, signatureStatus);
     }
 
     std::string GetServiceNameFromPID(DWORD pid) {
+        if (pid == 0) return "";
+
         SC_HANDLE schSCManager = OpenSCManagerA(NULL, NULL, SC_MANAGER_ENUMERATE_SERVICE);
         if (schSCManager == NULL) return "";
 
@@ -228,6 +116,8 @@ namespace ProcessScanner {
     }
 
     DWORD GetServicePID(const char* name) {
+        if (!name) return 0;
+
         SC_HANDLE schSCManager = OpenSCManagerA(NULL, NULL, SC_MANAGER_CONNECT);
         if (schSCManager == NULL) return 0;
 
@@ -296,7 +186,7 @@ namespace ProcessScanner {
 
     std::set<std::string> ScanProcessMemory(DWORD pid) {
         std::set<std::string> uniquePaths;
-        HANDLE phandle = OpenProcess(PROCESS_ALL_ACCESS, 0, pid);
+        HANDLE phandle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
         if (!phandle) return uniquePaths;
 
         MEMORY_BASIC_INFORMATION info;
@@ -309,7 +199,7 @@ namespace ProcessScanner {
 
             std::string memory(buffer.begin(), buffer.begin() + bytesRead);
 
-            // Drive letter paths
+            // Enhanced Drive letter paths with better detection
             for (size_t pos = 0; (pos = memory.find(":\\", pos + 1)) != std::string::npos; ) {
                 if (pos < 1 || !isalpha(memory[pos - 1])) continue;
 
@@ -321,33 +211,57 @@ namespace ProcessScanner {
                 while (endPos < memory.size() &&
                     (isalnum(memory[endPos]) || memory[endPos] == '\\' || memory[endPos] == '/' ||
                         memory[endPos] == '.' || memory[endPos] == '_' || memory[endPos] == '-' ||
-                        memory[endPos] == ' ' || memory[endPos] == '(' || memory[endPos] == ')')) {
+                        memory[endPos] == ' ' || memory[endPos] == '(' || memory[endPos] == ')' ||
+                        memory[endPos] == '"' || memory[endPos] == '\'' || memory[endPos] == '@' ||
+                        memory[endPos] == '!' || memory[endPos] == '#' || memory[endPos] == '$' ||
+                        memory[endPos] == '%' || memory[endPos] == '^' || memory[endPos] == '&' ||
+                        memory[endPos] == '*' || memory[endPos] == '+' || memory[endPos] == '=' ||
+                        memory[endPos] == '[' || memory[endPos] == ']' || memory[endPos] == '{' ||
+                        memory[endPos] == '}' || memory[endPos] == '|' || memory[endPos] == ';' ||
+                        memory[endPos] == ':' || memory[endPos] == ',')) {
                     path.push_back(memory[endPos]);
                     endPos++;
                 }
 
-                while (!path.empty() && (path.back() == ' ' || path.back() == '"')) {
+                // Clean up trailing spaces and quotes
+                while (!path.empty() && (path.back() == ' ' || path.back() == '"' || path.back() == '\'')) {
                     path.pop_back();
                 }
 
+                // Enhanced file extension detection
                 if (path.length() > 5 && path.find('.') != std::string::npos) {
                     std::string ext = path.substr(path.length() - 4);
                     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                    if (ext == ".exe" || ext == ".dll" || ext == ".sys" ||
-                        ext == ".cmd" || ext == ".bat" || ext == ".ps1" ||
-                        ext == ".msi" || ext == ".com") {
+
+                    // Expanded list of suspicious extensions
+                    std::set<std::string> suspiciousExtensions = {
+                        ".exe", ".dll", ".sys", ".cmd", ".bat", ".ps1", ".msi", ".com",
+                        ".scr", ".pif", ".jar", ".zip", ".rar", ".7z", ".tar", ".gz",
+                        ".vbs", ".js", ".wsf", ".hta", ".lnk", ".url", ".reg", ".inf",
+                        ".cab", ".msp", ".msu", ".deb", ".rpm", ".pkg", ".dmg", ".iso",
+                        ".img", ".vhd", ".vhdx", ".ova", ".ovf", ".qcow2", ".vdi", ".vmdk"
+                    };
+
+                    if (suspiciousExtensions.count(ext) > 0) {
                         uniquePaths.insert(path);
                     }
                 }
             }
 
-            // Device paths
+            // Enhanced Device paths with better pattern matching
             for (__int64 pos = 0; (pos = memory.find("\\Device\\HarddiskVolume", pos)) != std::string::npos; pos++) {
                 __int64 endPos = pos + 1;
                 while (endPos < memory.size() &&
                     (isalnum(memory[endPos]) || memory[endPos] == '\\' || memory[endPos] == '/' ||
                         memory[endPos] == '.' || memory[endPos] == '_' || memory[endPos] == '-' ||
-                        memory[endPos] == ' ' || memory[endPos] == '(' || memory[endPos] == ')')) {
+                        memory[endPos] == ' ' || memory[endPos] == '(' || memory[endPos] == ')' ||
+                        memory[endPos] == '"' || memory[endPos] == '\'' || memory[endPos] == '@' ||
+                        memory[endPos] == '!' || memory[endPos] == '#' || memory[endPos] == '$' ||
+                        memory[endPos] == '%' || memory[endPos] == '^' || memory[endPos] == '&' ||
+                        memory[endPos] == '*' || memory[endPos] == '+' || memory[endPos] == '=' ||
+                        memory[endPos] == '[' || memory[endPos] == ']' || memory[endPos] == '{' ||
+                        memory[endPos] == '}' || memory[endPos] == '|' || memory[endPos] == ';' ||
+                        memory[endPos] == ':' || memory[endPos] == ',')) {
                     endPos++;
                 }
 
@@ -357,13 +271,22 @@ namespace ProcessScanner {
                 if (convertedPath != devicePath && convertedPath.length() > 3) {
                     std::string ext = convertedPath.substr(convertedPath.length() - 4);
                     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                    if (ext == ".exe" || ext == ".dll" || ext == ".sys" ||
-                        ext == ".cmd" || ext == ".bat" || ext == ".ps1" ||
-                        ext == ".msi" || ext == ".com") {
+
+                    // Use same suspicious extensions list
+                    std::set<std::string> suspiciousExtensions = {
+                        ".exe", ".dll", ".sys", ".cmd", ".bat", ".ps1", ".msi", ".com",
+                        ".scr", ".pif", ".jar", ".zip", ".rar", ".7z", ".tar", ".gz",
+                        ".vbs", ".js", ".wsf", ".hta", ".lnk", ".url", ".reg", ".inf",
+                        ".cab", ".msp", ".msu", ".deb", ".rpm", ".pkg", ".dmg", ".iso",
+                        ".img", ".vhd", ".vhdx", ".ova", ".ovf", ".qcow2", ".vdi", ".vmdk"
+                    };
+
+                    if (suspiciousExtensions.count(ext) > 0) {
                         uniquePaths.insert(convertedPath);
                     }
                 }
             }
+
         }
 
         CloseHandle(phandle);
@@ -410,7 +333,7 @@ namespace ProcessScanner {
                 << "\"" << escapedPath.substr(escapedPath.find_last_of("\\/") + 1) << "\","
                 << "\"" << escapedPath << "\","
                 << "\"" << file.signatureStatus << "\","
-                << "\"" << file.trusted << "\","   // <-- NEW
+                << "\"" << file.trusted << "\","
                 << "\"" << (file.fileExists ? "Yes" : "No") << "\","
                 << "\"" << file.sourceProcess << "\","
                 << "\"" << file.sourcePID << "\"\n";
@@ -490,7 +413,7 @@ namespace ProcessScanner {
                             }
 
                             if (!EnhancedLogger::IsDuplicateEntry(path, issueType)) {
-                                EnhancedLogger::DetailedLogEntry logEntry;
+                                DetailedLogEntry logEntry = {};
                                 logEntry.timestamp = EnhancedLogger::GetCurrentTimestamp();
                                 logEntry.scanType = "ProcessMemory";
                                 logEntry.source = "Service: " + service;
@@ -506,7 +429,7 @@ namespace ProcessScanner {
                                 logEntry.fileExists = info.fileExists;
                                 logEntry.sourcePID = pid;
 
-                                EnhancedLogger::LogProblematicEntry(logEntry);
+                                EnhancedLogger::CollectProblematicEntry(logEntry);
                                 EnhancedLogger::AddToGlobalTracking(path, issueType);
                             }
                         }
@@ -570,7 +493,7 @@ namespace ProcessScanner {
                             }
 
                             if (!EnhancedLogger::IsDuplicateEntry(path, issueType)) {
-                                EnhancedLogger::DetailedLogEntry logEntry;
+                                DetailedLogEntry logEntry = {};
                                 logEntry.timestamp = EnhancedLogger::GetCurrentTimestamp();
                                 logEntry.scanType = "ProcessMemory";
                                 logEntry.source = "Process: " + displayName;
@@ -586,7 +509,7 @@ namespace ProcessScanner {
                                 logEntry.fileExists = info.fileExists;
                                 logEntry.sourcePID = pid;
 
-                                EnhancedLogger::LogProblematicEntry(logEntry);
+                                EnhancedLogger::CollectProblematicEntry(logEntry);
                                 EnhancedLogger::AddToGlobalTracking(path, issueType);
                             }
                         }
@@ -595,15 +518,8 @@ namespace ProcessScanner {
             }
         }
 
-        // Generate CSV filename with timestamp
-        std::string filename = "ProcessMemoryScan_";
-        time_t now = time(nullptr);
-        tm tm;
-        localtime_s(&tm, &now);
-        char timeStr[20];
-        strftime(timeStr, sizeof(timeStr), "%Y%m%d_%H%M%S", &tm);
-        filename += timeStr;
-        filename += ".csv";
+        // Generate CSV filename without timestamp
+        std::string filename = "ProcessMemoryScan.csv";
 
         ExportToCSV(allFileInfo, filename);
         return allFileInfo;

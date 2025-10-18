@@ -11,7 +11,7 @@
 #include <ctime>
 #include <sstream>
 #include <winhttp.h>
-#include <json/json.h> // Assuming jsoncpp library is available
+#include <chrono>
 
 struct DetailedLogEntry {
     std::string timestamp;
@@ -39,14 +39,16 @@ namespace EnhancedLogger {
     std::string GetDetailedFileInfo(const std::string& filePath);
     bool IsProblematicEntry(const std::string& signatureStatus, const std::string& trustedStatus);
     void LogProblematicEntry(const DetailedLogEntry& entry);
+    void CollectProblematicEntry(const DetailedLogEntry& entry);
     void ExportDetailedLogToCSV(const std::vector<DetailedLogEntry>& entries, const std::string& filename);
     void ExportDetailedLogToTXT(const std::vector<DetailedLogEntry>& entries, const std::string& filename);
     void InitializeGlobalTracking();
     bool IsDuplicateEntry(const std::string& filePath, const std::string& issueType);
     void AddToGlobalTracking(const std::string& filePath, const std::string& issueType);
 
-    // SentryX Integration
-    bool SendToSentryX(const DetailedLogEntry& entry);
-    std::string CreateSentryXPayload(const DetailedLogEntry& entry);
-    bool PerformHttpRequest(const std::string& url, const std::string& method, const std::string& data, const std::map<std::string, std::string>& headers);
+    // Simplified signature checking - only Valid or Invalid
+
+    // Simplified Signature Checking - Consistent Results
+    std::string CheckFileSignatureUnified(const std::string& filePath);
+    std::string CheckFileTrustUnified(const std::string& filePath, std::string& signatureStatus);
 }

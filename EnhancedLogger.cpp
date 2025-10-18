@@ -3,14 +3,17 @@
 #include <wincrypt.h>
 #include <wintrust.h>
 #include <softpub.h>
+#include <mscat.h>
 #include <fstream>
 #include <algorithm>
 #include <cctype>
 #include <sstream>
+#include <chrono>
 
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "crypt32.lib")
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "version.lib")
 
 namespace EnhancedLogger {
     std::set<std::string> globalTrackingSet;
@@ -169,13 +172,8 @@ namespace EnhancedLogger {
             return true;
         }
 
-        // Check for unsigned files
-        if (signatureStatus == "Unsigned" || signatureStatus == "Invalid") {
-            return true;
-        }
-
-        // Check for untrusted files
-        if (trustedStatus == "Untrusted" || trustedStatus == "Unsigned") {
+        // Any invalid signature is problematic
+        if (signatureStatus == "Invalid" || signatureStatus == "Unsigned") {
             return true;
         }
 
@@ -183,51 +181,28 @@ namespace EnhancedLogger {
     }
 
     void LogProblematicEntry(const DetailedLogEntry& entry) {
-        // Send to SentryX server first
-        SetConsoleColor(FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-        std::cout << "[SENTRYX] Sending problematic entry to remote server..." << std::endl;
-        ResetConsoleColor();
-
-        if (SendToSentryX(entry)) {
-            SetConsoleColor(FOREGROUND_GREEN);
-            std::cout << "[SENTRYX] Successfully sent to remote server" << std::endl;
-            ResetConsoleColor();
-        } else {
-            SetConsoleColor(FOREGROUND_RED);
-            std::cout << "[SENTRYX] Failed to send to remote server" << std::endl;
-            ResetConsoleColor();
-        }
-
-        // Console output with colors
+        // Display professional console output for problematic entries
         SetConsoleColor(FOREGROUND_RED | FOREGROUND_INTENSITY);
-        std::cout << "\n=== PROBLEMATIC ENTRY DETECTED ===" << std::endl;
+        std::cout << "[ALERT] ";
         ResetConsoleColor();
+        std::cout << "Problematic file detected: " << entry.filePath << std::endl;
 
-        std::cout << "Timestamp: " << entry.timestamp << std::endl;
-        std::cout << "Scan Type: " << entry.scanType << std::endl;
-        std::cout << "Source: " << entry.source << std::endl;
-
-        SetConsoleColor(FOREGROUND_RED);
-        std::cout << "ISSUE: " << entry.issueType << std::endl;
-        ResetConsoleColor();
-
-        std::cout << "File Path: " << entry.filePath << std::endl;
-        std::cout << "Signature Status: " << entry.signatureStatus << std::endl;
-        std::cout << "Trusted Status: " << entry.trustedStatus << std::endl;
-
+        SetConsoleColor(FOREGROUND_RED | FOREGROUND_GREEN);
+        std::cout << "        Type: " << entry.scanType;
+        std::cout << " | Source: " << entry.source;
+        std::cout << " | Issue: " << entry.issueType << std::endl;
+        std::cout << "        Signature: " << entry.signatureStatus;
+        std::cout << " | Trust: " << entry.trustedStatus;
         if (entry.fileExists) {
-            std::cout << "File Size: " << entry.fileSize << std::endl;
-            std::cout << "Modification Time: " << entry.modificationTime << std::endl;
-            std::cout << "MD5 Hash: " << entry.md5Hash << std::endl;
-            std::cout << "SHA256 Hash: " << entry.sha256Hash << std::endl;
-            std::cout << "Additional Info: " << entry.additionalInfo << std::endl;
+            std::cout << " | Size: " << entry.fileSize;
         }
+        std::cout << std::endl;
+        ResetConsoleColor();
+    }
 
-        if (entry.sourcePID != 0) {
-            std::cout << "Source PID: " << entry.sourcePID << std::endl;
-        }
-
-        std::cout << "=====================================" << std::endl;
+    void CollectProblematicEntry(const DetailedLogEntry& entry) {
+        // Just log the entry for now (no SentryX collection)
+        LogProblematicEntry(entry);
     }
 
     void ExportDetailedLogToCSV(const std::vector<DetailedLogEntry>& entries, const std::string& filename) {
@@ -336,44 +311,6 @@ namespace EnhancedLogger {
         globalPathIssueTracking[filePath].insert(issueType);
     }
 
-    // SentryX Integration Functions
-    bool SendToSentryX(const DetailedLogEntry& entry) {
-        std::string payload = CreateSentryXPayload(entry);
-        std::string url = "http://sentryx.drizzy.vip/api/13/logs";
-
-        std::map<std::string, std::string> headers;
-        headers["Content-Type"] = "application/json";
-        headers["X-API-Key"] = "fw52GwXQcw3UtVdsI7mlRwIVfhErgQ6tkWSFgNdR1oc";
-
-        return PerformHttpRequest(url, "POST", payload, headers);
-    }
-
-    std::string CreateSentryXPayload(const DetailedLogEntry& entry) {
-        std::ostringstream json;
-
-        json << "{";
-        json << "\"type\":\"SentryScanner\",";
-        json << "\"message\":\"Problematic file detected: " << entry.filePath << "\",";
-        json << "\"data\":{";
-        json << "\"timestamp\":\"" << entry.timestamp << "\",";
-        json << "\"scanType\":\"" << entry.scanType << "\",";
-        json << "\"source\":\"" << entry.source << "\",";
-        json << "\"filePath\":\"" << entry.filePath << "\",";
-        json << "\"issueType\":\"" << entry.issueType << "\",";
-        json << "\"signatureStatus\":\"" << entry.signatureStatus << "\",";
-        json << "\"trustedStatus\":\"" << entry.trustedStatus << "\",";
-        json << "\"fileSize\":\"" << entry.fileSize << "\",";
-        json << "\"modificationTime\":\"" << entry.modificationTime << "\",";
-        json << "\"md5Hash\":\"" << entry.md5Hash << "\",";
-        json << "\"sha256Hash\":\"" << entry.sha256Hash << "\",";
-        json << "\"fileExists\":\"" << (entry.fileExists ? "true" : "false") << "\",";
-        json << "\"sourcePID\":\"" << entry.sourcePID << "\",";
-        json << "\"additionalInfo\":\"" << entry.additionalInfo << "\"";
-        json << "}";
-        json << "}";
-
-        return json.str();
-    }
 
     bool PerformHttpRequest(const std::string& url, const std::string& method, const std::string& data, const std::map<std::string, std::string>& headers) {
         // Parse URL
@@ -392,7 +329,7 @@ namespace EnhancedLogger {
         }
 
         // Initialize WinHTTP
-        HINTERNET hSession = WinHttpOpen(L"RitzyScanner/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        HINTERNET hSession = WinHttpOpen(L"ForensicsScanner/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
         if (!hSession) return false;
 
         HINTERNET hConnect = WinHttpConnect(hSession, std::wstring(host.begin(), host.end()).c_str(), INTERNET_DEFAULT_HTTP_PORT, 0);
@@ -417,13 +354,30 @@ namespace EnhancedLogger {
                 (DWORD)headerStr.length(), WINHTTP_ADDREQ_FLAG_ADD);
         }
 
-        // Send request
-        std::wstring wData(data.begin(), data.end());
-        LPCWSTR pData = wData.c_str();
-        DWORD dataLength = (DWORD)data.length() * sizeof(wchar_t);
+        // Send request with JSON data
+        if (method == "POST" && !data.empty()) {
+            // Convert string to wide string for WinHTTP
+            std::wstring wData(data.begin(), data.end());
+            LPCWSTR pData = wData.c_str();
+            DWORD dataLength = (DWORD)data.length();
 
-        BOOL result = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-            (LPVOID)pData, dataLength, dataLength, 0);
+            BOOL result = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                (LPVOID)pData, dataLength, dataLength, 0);
+
+            if (result) {
+                result = WinHttpReceiveResponse(hRequest, NULL);
+            }
+
+            // Cleanup
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            WinHttpCloseHandle(hSession);
+
+            return result == TRUE;
+        }
+
+        // For GET requests or empty POST data
+        BOOL result = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, NULL, 0, 0, 0);
 
         if (result) {
             result = WinHttpReceiveResponse(hRequest, NULL);
@@ -435,5 +389,90 @@ namespace EnhancedLogger {
         WinHttpCloseHandle(hSession);
 
         return result == TRUE;
+    }
+
+    // Unified signature checking functions
+    std::string CheckFileSignatureUnified(const std::string& filePath) {
+        DWORD fileAttrs = GetFileAttributesA(filePath.c_str());
+        if (fileAttrs == INVALID_FILE_ATTRIBUTES) {
+            return "Deleted";
+        }
+
+        // Skip directories
+        if (fileAttrs & FILE_ATTRIBUTE_DIRECTORY) {
+            return "Directory";
+        }
+
+        std::wstring widePath(filePath.begin(), filePath.end());
+        WINTRUST_FILE_INFO fileData;
+        memset(&fileData, 0, sizeof(fileData));
+        fileData.cbStruct = sizeof(WINTRUST_FILE_INFO);
+        fileData.pcwszFilePath = widePath.c_str();
+        fileData.hFile = NULL;
+        fileData.pgKnownSubject = NULL;
+
+        GUID WVTPolicyGUID = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+        WINTRUST_DATA winTrustData;
+        memset(&winTrustData, 0, sizeof(winTrustData));
+        winTrustData.cbStruct = sizeof(winTrustData);
+        winTrustData.pPolicyCallbackData = NULL;
+        winTrustData.pSIPClientData = NULL;
+        winTrustData.dwUIChoice = WTD_UI_NONE;
+        winTrustData.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
+        winTrustData.dwUnionChoice = WTD_CHOICE_FILE;
+        winTrustData.dwStateAction = WTD_STATEACTION_VERIFY;
+        winTrustData.hWVTStateData = NULL;
+        winTrustData.pwszURLReference = NULL;
+        winTrustData.dwProvFlags = WTD_REVOCATION_CHECK_CHAIN |
+            WTD_HASH_ONLY_FLAG |
+            WTD_USE_DEFAULT_OSVER_CHECK |
+            WTD_LIFETIME_SIGNING_FLAG |
+            WTD_CACHE_ONLY_URL_RETRIEVAL;
+        winTrustData.pFile = &fileData;
+
+        LONG lStatus = WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
+
+        if (lStatus == ERROR_SUCCESS) {
+            winTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
+            WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
+            return "Valid (Authenticode)";
+        }
+
+        // Check catalog signature
+        HCATADMIN hCatAdmin = NULL;
+        if (CryptCATAdminAcquireContext(&hCatAdmin, NULL, 0)) {
+            HANDLE hFile = CreateFileA(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+            if (hFile != INVALID_HANDLE_VALUE) {
+                DWORD dwHashSize = 0;
+                if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, NULL, 0)) {
+                    BYTE* pbHash = new BYTE[dwHashSize];
+                    if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, pbHash, 0)) {
+                        CATALOG_INFO catalogInfo = {0};
+                        catalogInfo.cbStruct = sizeof(catalogInfo);
+
+                        HCATINFO hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, pbHash, dwHashSize, 0, NULL);
+                        if (hCatInfo) {
+                            CryptCATCatalogInfoFromContext(hCatInfo, &catalogInfo, 0);
+                            CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0);
+                            delete[] pbHash;
+                            CloseHandle(hFile);
+                            CryptCATAdminReleaseContext(hCatAdmin, 0);
+                            return "Valid (Catalog)";
+                        }
+                    }
+                    delete[] pbHash;
+                }
+                CloseHandle(hFile);
+            }
+            CryptCATAdminReleaseContext(hCatAdmin, 0);
+        }
+
+        // Simplified: only Valid or Invalid
+        return "Invalid";
+    }
+
+    // Simplified trust checking - just return the signature status
+    std::string CheckFileTrustUnified(const std::string& filePath, std::string& signatureStatus) {
+        return signatureStatus; // Just return the signature status as trust status
     }
 }

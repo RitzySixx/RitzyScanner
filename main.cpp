@@ -1,4 +1,6 @@
 #include <iostream>
+#include <vector>
+#include <string>
 #include "RegistryParser.h"
 #include "ProcessScanner.h"
 #include "JumpListParser.h"
@@ -7,59 +9,111 @@
 #include "DirectFinds.h"
 #include "PrefetchAnalyzer.h"
 #include "EnhancedLogger.h"
+#include "strings.h"
+#include "DiscordDownloads.h"
+
+// Structure to hold scan summary
+struct ScanSummary {
+    std::string scanType;
+    int totalEntries;
+    int problematicEntries;
+    std::string status;
+};
 
 int main() {
-    std::cout << "=== Starting Enhanced Forensic Scanner ===\n";
+    std::cout << "===============================================\n";
+    std::cout << "    Enhanced Forensic Scanner v2.0\n";
+    std::cout << "    Professional Digital Forensics Tool\n";
+    std::cout << "===============================================\n\n";
 
     // Initialize enhanced logging system
     EnhancedLogger::InitializeGlobalTracking();
-    std::cout << "Enhanced logging system initialized for problematic entries only\n";
+    std::cout << "[INFO] Logging system initialized\n\n";
+
+    std::vector<ScanSummary> scanResults;
 
     // Run Registry Parser
-    std::cout << "\n[1/6] Running Registry Parser...\n";
+    std::cout << "[1/7] Registry Analysis...\n";
+    std::cout << "       Scanning system registry for suspicious entries...\n";
     auto registryResults = RegistryParser::ParseAllRegistry();
-    std::cout << " Found " << registryResults.size() << " registry entries\n";
-    // Run Process Scanner
-    std::cout << "\n[2/6] Running Process Scanner...\n";
-    auto processResults = ProcessScanner::ScanAllProcesses();
-    std::cout << " Found " << processResults.size() << " file references in process memory\n";
-    // Run Jump List Parser
-    std::cout << "\n[3/6] Running Jump List Parser...\n";
-    auto jumpListResults = JumpListParser::ParseAllJumpLists();
-    std::cout << " Found " << jumpListResults.size() << " jump list entries\n";
-    // Run Service Checker
-    std::cout << "\n[4/6] Checking Key Services...\n";
-    auto serviceResults = ServiceScanner::CheckServices();
-    std::cout << " Service scan complete. Results saved to Services.csv\n";
-    // Run PCA App Launch Parser
-    std::cout << "\n[5/6] Running PCA App Launch Parser...\n";
+    scanResults.push_back({"Registry", (int)registryResults.size(), 0, "Complete"});
+    std::cout << "       Complete - " << registryResults.size() << " entries processed\n\n";
+
+    // Run Process Scanner (separate from memory pattern scanning)
+    std::cout << "[2/7] Process File Analysis...\n";
+    auto processFileResults = ProcessScanner::ScanAllProcesses();
+    ProcessScanner::ExportToCSV(processFileResults, "ProcessFiles.csv");
+    scanResults.push_back({"ProcessFiles", (int)processFileResults.size(), 0, "Complete"});
+    std::cout << "       Complete - " << processFileResults.size() << " file references found\n\n";
+
+    // Run PCA Application Launch Parser
+    std::cout << "[3/7] PCA Application Launch Analysis...\n";
     auto pcaResults = PcaAppLaunch::ParsePcaAppLaunch();
-    std::cout << " Found " << pcaResults.size() << " PCA app launch entries\n";
+    scanResults.push_back({"PCA_AppLaunch", (int)pcaResults.size(), 0, "Complete"});
+    std::cout << "       Complete - " << pcaResults.size() << " launch entries\n\n";
+
     // Run Prefetch Analyzer
-    std::cout << "\n[6/7] Running Prefetch Analyzer...\n";
+    std::cout << "[4/7] Prefetch File Analysis...\n";
     PrefetchAnalyzer analyzer;
-    if (!analyzer.CheckAdminPrivileges()) {
-        std::cout << " Warning: Not running as administrator. Some features may not work.\n";
+    std::string adminStatus = "Standard User";
+    if (analyzer.CheckAdminPrivileges()) {
+        adminStatus = "Administrator";
     }
     analyzer.AnalyzePrefetchFiles("C:\\Windows\\Prefetch");
     analyzer.LogToCSV("prefetch_analysis.csv");
-    std::cout << " Prefetch analysis complete. Results saved to prefetch_analysis.csv\n";
-    // Run Direct Finds Scanner
-    std::cout << "\n[7/7] Running Direct Finds Scanner (checking FiveM and GTA V folders)...\n";
+    scanResults.push_back({"Prefetch", 0, 0, "Complete (" + adminStatus + ")"});
+    std::cout << "       Complete - Prefetch analysis finished\n\n";
+
+    // Run Service Checker
+    std::cout << "[5/7] Service Analysis...\n";
+    auto serviceResults = ServiceScanner::CheckServices();
+    scanResults.push_back({"Services", (int)serviceResults.size(), 0, "Complete"});
+    std::cout << "       Complete - Service scan finished\n\n";
+
+    // Run Jump List Parser
+    std::cout << "[6/7] Jump List Analysis...\n";
+    auto jumpListResults = JumpListParser::ParseAllJumpLists();
+    scanResults.push_back({"JumpLists", (int)jumpListResults.size(), 0, "Complete"});
+    std::cout << "       Complete - " << jumpListResults.size() << " entries analyzed\n\n";
+
+    // Run Direct Finds and Strings Scanner
+    std::cout << "[7/8] Direct File System & Memory Pattern Scan...\n";
     auto directResults = DirectFinds::ScanDirectFinds();
-    std::cout << " Found " << directResults.size() << " direct findings\n";
-    std::cout << "\n=== Enhanced Forensic Scan Complete ===\n";
-    std::cout << "Results saved to:\n";
-    std::cout << " - Registry.csv\n";
-    std::cout << " - ProcessMemoryScan_<timestamp>.csv\n";
-    std::cout << " - Jumplists.csv\n";
-    std::cout << " - Services.csv\n";
-    std::cout << " - PcaAppLaunch.csv\n";
-    std::cout << " - prefetch_analysis.csv\n";
-    std::cout << " - DirectFinds.csv\n";
-    std::cout << "\nEnhanced Logging:\n";
-    std::cout << " - Problematic entries logged to SentryX server\n";
-    std::cout << " - Detailed local logs available in current directory\n";
-    system("pause");
+    scanResults.push_back({"DirectFinds", (int)directResults.size(), 0, "Complete"});
+    std::cout << "       Complete - " << directResults.size() << " findings\n\n";
+
+    // Run Discord Downloads Scanner (Attachment-focused)
+    std::cout << "[8/8] Discord Attachments Analysis...\n";
+    auto discordDownloads = ExtractDiscordDownloads();
+    CreateDiscordDownloadsCSV(discordDownloads);
+    scanResults.push_back({"DiscordDownloads", (int)discordDownloads.size(), 0, "Complete"});
+    std::cout << "       Complete - " << discordDownloads.size() << " Discord attachments found\n\n";
+
+    // Final Summary
+    std::cout << "===============================================\n";
+    std::cout << "           SCAN COMPLETE - SUMMARY\n";
+    std::cout << "===============================================\n\n";
+
+    std::cout << "Scan Results:\n";
+    for (const auto& result : scanResults) {
+        std::cout << "• " << result.scanType << ": " << result.totalEntries << " entries\n";
+    }
+
+    std::cout << "\nOutput Files Generated:\n";
+    std::cout << "• Registry.csv\n";
+    std::cout << "• ProcessFiles.csv\n";
+    std::cout << "• PcaAppLaunch.csv\n";
+    std::cout << "• prefetch_analysis.csv\n";
+    std::cout << "• Services.csv\n";
+    std::cout << "• Jumplists.csv\n";
+    std::cout << "• DirectFinds.csv\n";
+    std::cout << "• DiscordAttachments.csv\n";
+
+    std::cout << "\n\x1B[92m[SUCCESS]\x1B[0m Forensic scan completed successfully!\n";
+    std::cout << "\x1B[94m[INFO]\x1B[0m All results saved locally to CSV files\n";
+    std::cout << "\x1B[94m[INFO]\x1B[0m Problematic entries logged to console and detailed CSV files\n\n";
+
+    std::cout << "Press Enter to exit...";
+    std::cin.get();
     return 0;
 }

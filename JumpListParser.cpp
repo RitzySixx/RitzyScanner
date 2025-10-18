@@ -1,5 +1,6 @@
 ﻿#define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #include "JumpListParser.h"
+#include "EnhancedLogger.h"
 #include <shlobj.h>
 #include <propkey.h>
 #include <propvarutil.h>
@@ -33,6 +34,7 @@
 #pragma comment(lib, "comsuppw.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "oleaut32.lib")
+#pragma comment(lib, "version.lib")
 
 namespace JumpListParser {
     std::mutex entriesMutex;
@@ -76,58 +78,8 @@ namespace JumpListParser {
             return "Skipped (Media File)";
         }
 
-        DWORD attrs = GetFileAttributesW(filePath.c_str());
-        if (attrs == INVALID_FILE_ATTRIBUTES) {
-            return "Deleted";
-        }
-
-        WINTRUST_FILE_INFO fileData = {};
-        fileData.cbStruct = sizeof(fileData);
-        fileData.pcwszFilePath = filePath.c_str();
-
-        GUID WVTPolicyGUID = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-        WINTRUST_DATA winTrustData = {};
-        winTrustData.cbStruct = sizeof(winTrustData);
-        winTrustData.dwUIChoice = WTD_UI_NONE;
-        winTrustData.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
-        winTrustData.dwUnionChoice = WTD_CHOICE_FILE;
-        winTrustData.dwStateAction = WTD_STATEACTION_VERIFY;
-        winTrustData.pFile = &fileData;
-
-        LONG lStatus = WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
-
-        winTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
-        WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
-
-        if (lStatus == ERROR_SUCCESS) {
-            return "Valid (Authenticode)";
-        }
-
-        HCATADMIN hCatAdmin;
-        if (CryptCATAdminAcquireContext(&hCatAdmin, NULL, 0)) {
-            HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-            if (hFile != INVALID_HANDLE_VALUE) {
-                DWORD dwHashSize = 0;
-                if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, NULL, 0)) {
-                    BYTE* pbHash = new BYTE[dwHashSize];
-                    if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, pbHash, 0)) {
-                        HCATINFO hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, pbHash, dwHashSize, 0, NULL);
-                        if (hCatInfo) {
-                            CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0);
-                            delete[] pbHash;
-                            CloseHandle(hFile);
-                            CryptCATAdminReleaseContext(hCatAdmin, 0);
-                            return "Valid (Catalog)";
-                        }
-                    }
-                    delete[] pbHash;
-                }
-                CloseHandle(hFile);
-            }
-            CryptCATAdminReleaseContext(hCatAdmin, 0);
-        }
-
-        return "Invalid";
+        std::string filePathA = WideToUTF8(filePath);
+        return EnhancedLogger::CheckFileSignatureUnified(filePathA);
     }
 
     std::string IsSignatureTrusted(const std::string& signatureStatus, const std::wstring& filePath) {
@@ -139,25 +91,9 @@ namespace JumpListParser {
             return "Untrusted";
         }
 
-        WINTRUST_FILE_INFO fileInfo = {};
-        fileInfo.cbStruct = sizeof(WINTRUST_FILE_INFO);
-        fileInfo.pcwszFilePath = filePath.c_str();
-
-        GUID WVTPolicyGUID = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-        WINTRUST_DATA winTrustData = {};
-        winTrustData.cbStruct = sizeof(winTrustData);
-        winTrustData.dwUIChoice = WTD_UI_NONE;
-        winTrustData.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
-        winTrustData.dwUnionChoice = WTD_CHOICE_FILE;
-        winTrustData.dwStateAction = WTD_STATEACTION_VERIFY;
-        winTrustData.pFile = &fileInfo;
-
-        LONG lStatus = WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
-
-        winTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
-        WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
-
-        return (lStatus == ERROR_SUCCESS) ? "Trusted" : "Untrusted";
+        std::string filePathA = WideToUTF8(filePath);
+        std::string mutableSignature = signatureStatus;
+        return EnhancedLogger::CheckFileTrustUnified(filePathA, mutableSignature);
     }
 
     std::wstring GetPropertyString(IPropertyStore* pPropStore, const PROPERTYKEY& key) {

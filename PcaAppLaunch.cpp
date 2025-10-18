@@ -1,5 +1,6 @@
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #include "PcaAppLaunch.h"
+#include "EnhancedLogger.h"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -17,6 +18,7 @@
 
 #pragma comment(lib, "wintrust.lib")
 #pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "version.lib")
 
 namespace fs = std::filesystem;
 namespace PcaAppLaunch {
@@ -105,128 +107,14 @@ namespace PcaAppLaunch {
     // Check file signature
     std::string CheckFileSignature(const std::wstring& filePath) {
         std::string filePathA = WideToUTF8(filePath);
-        WINTRUST_FILE_INFO fileData;
-        memset(&fileData, 0, sizeof(fileData));
-        fileData.cbStruct = sizeof(WINTRUST_FILE_INFO);
-        fileData.pcwszFilePath = filePath.c_str();
-        fileData.hFile = NULL;
-        fileData.pgKnownSubject = NULL;
-
-        GUID WVTPolicyGUID = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-        WINTRUST_DATA winTrustData;
-        memset(&winTrustData, 0, sizeof(winTrustData));
-        winTrustData.cbStruct = sizeof(winTrustData);
-        winTrustData.pPolicyCallbackData = NULL;
-        winTrustData.pSIPClientData = NULL;
-        winTrustData.dwUIChoice = WTD_UI_NONE;
-        winTrustData.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
-        winTrustData.dwUnionChoice = WTD_CHOICE_FILE;
-        winTrustData.dwStateAction = WTD_STATEACTION_VERIFY;
-        winTrustData.hWVTStateData = NULL;
-        winTrustData.pwszURLReference = NULL;
-        winTrustData.dwProvFlags = WTD_REVOCATION_CHECK_CHAIN |
-            WTD_HASH_ONLY_FLAG |
-            WTD_USE_DEFAULT_OSVER_CHECK |
-            WTD_LIFETIME_SIGNING_FLAG |
-            WTD_CACHE_ONLY_URL_RETRIEVAL;
-        winTrustData.pFile = &fileData;
-
-        LONG lStatus = WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
-
-        if (lStatus == ERROR_SUCCESS) {
-            winTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
-            WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
-            return "Valid (Authenticode)";
-        }
-
-        HCATADMIN hCatAdmin;
-        if (CryptCATAdminAcquireContext(&hCatAdmin, NULL, 0)) {
-            HANDLE hFile = CreateFileA(filePathA.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-            if (hFile != INVALID_HANDLE_VALUE) {
-                DWORD dwHashSize;
-                if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, NULL, 0)) {
-                    BYTE* pbHash = new BYTE[dwHashSize];
-                    if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, pbHash, 0)) {
-                        CATALOG_INFO catalogInfo;
-                        memset(&catalogInfo, 0, sizeof(catalogInfo));
-                        catalogInfo.cbStruct = sizeof(catalogInfo);
-
-                        HCATINFO hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, pbHash, dwHashSize, 0, NULL);
-                        if (hCatInfo) {
-                            CryptCATCatalogInfoFromContext(hCatInfo, &catalogInfo, 0);
-                            CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0);
-                            delete[] pbHash;
-                            CloseHandle(hFile);
-                            CryptCATAdminReleaseContext(hCatAdmin, 0);
-                            return "Valid (Catalog)";
-                        }
-                    }
-                    delete[] pbHash;
-                }
-                CloseHandle(hFile);
-            }
-            CryptCATAdminReleaseContext(hCatAdmin, 0);
-        }
-
-        return "Invalid";
+        return EnhancedLogger::CheckFileSignatureUnified(filePathA);
     }
 
     // Check if signature is trusted
     std::string IsSignatureTrusted(std::string& signatureStatus, const std::wstring& filePath) {
         std::string filePathA = WideToUTF8(filePath);
-        LONG lStatus;
-        GUID policyGUID = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-
-        WINTRUST_FILE_INFO fileInfo = {};
-        fileInfo.cbStruct = sizeof(WINTRUST_FILE_INFO);
-        fileInfo.pcwszFilePath = filePath.c_str();
-
-        WINTRUST_DATA winTrustData = {};
-        winTrustData.cbStruct = sizeof(winTrustData);
-        winTrustData.dwUIChoice = WTD_UI_NONE;
-        winTrustData.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
-        winTrustData.dwUnionChoice = WTD_CHOICE_FILE;
-        winTrustData.dwStateAction = 0;
-        winTrustData.pFile = &fileInfo;
-
-        lStatus = WinVerifyTrust(NULL, &policyGUID, &winTrustData);
-
-        if (lStatus == ERROR_SUCCESS) {
-            return "Trusted";
-        }
-        else if (lStatus == TRUST_E_NOSIGNATURE) {
-            HCATADMIN hCatAdmin;
-            if (CryptCATAdminAcquireContext(&hCatAdmin, NULL, 0)) {
-                HANDLE hFile = CreateFileA(filePathA.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-                if (hFile != INVALID_HANDLE_VALUE) {
-                    DWORD dwHashSize;
-                    if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, NULL, 0)) {
-                        BYTE* pbHash = new BYTE[dwHashSize];
-                        if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, pbHash, 0)) {
-                            HCATINFO hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, pbHash, dwHashSize, 0, NULL);
-                            if (hCatInfo) {
-                                CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0);
-                                delete[] pbHash;
-                                CloseHandle(hFile);
-                                CryptCATAdminReleaseContext(hCatAdmin, 0);
-                                signatureStatus = "Valid (Catalog)";
-                                return "Trusted";
-                            }
-                        }
-                        delete[] pbHash;
-                    }
-                    CloseHandle(hFile);
-                }
-                CryptCATAdminReleaseContext(hCatAdmin, 0);
-            }
-
-            signatureStatus = "Unsigned";
-            return "Unsigned";
-        }
-        else {
-            signatureStatus = "Invalid";
-            return "Untrusted";
-        }
+        std::string mutableSignature = signatureStatus;
+        return EnhancedLogger::CheckFileTrustUnified(filePathA, mutableSignature);
     }
 
     // Export to CSV

@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <unordered_set>
+#include <ctime>
 
 struct RegistryEntry {
     std::string executionTime;

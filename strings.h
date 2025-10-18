@@ -1,5 +1,6 @@
 #pragma once
 #include "utils.h"
+#include "DiscordDownloads.h"
 #include <windows.h>
 #include <tlhelp32.h>
 #include <psapi.h>
@@ -16,6 +17,7 @@
 #include <future>
 #include <locale>
 #include <codecvt>
+#include <regex>
 
 struct StringMatch {
     std::string detectionName;
@@ -48,9 +50,11 @@ struct ScanResult {
     std::string matchType;
 };
 
+
 class MemoryScanner {
 private:
     std::map<std::string, std::vector<DetectionString>> processDetections;
+    std::regex discordCdnPattern;
 
 public:
     MemoryScanner();
@@ -70,9 +74,11 @@ private:
     bool IsRegionStringLike(const std::vector<BYTE>& buffer, size_t bytesRead);
     DWORD GetServicePID(const std::string& serviceName);
     DWORD GetExplorerPID();
+    DWORD GetDiscordPID();
     std::string GetProcessName(DWORD pid);
     std::vector<ScanResult> ScanServiceMemory(DWORD pid, const std::string& processType, const std::vector<DetectionString>& detections);
     std::vector<ScanResult> ScanExplorerMemory(DWORD pid, const std::string& processType, const std::vector<DetectionString>& detections);
+    std::vector<ScanResult> ScanDiscordMemory(DWORD pid, const std::string& processType, const std::vector<DetectionString>& detections, std::vector<DiscordDownload>& discordDownloads);
 };
 
 std::vector<StringMatch> ScanProcessesAndServicesForStrings();

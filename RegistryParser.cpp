@@ -20,6 +20,7 @@
 #pragma comment(lib, "wintrust.lib")
 #pragma comment(lib, "crypt32.lib")
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "version.lib")
 
 namespace RegistryParser {
     void SetConsoleColor(WORD color) {
@@ -95,143 +96,11 @@ namespace RegistryParser {
     }
 
     std::string CheckFileSignature(const std::string& filePath) {
-        if (GetFileAttributesA(filePath.c_str()) == INVALID_FILE_ATTRIBUTES) {
-            return "Deleted";
-        }
-
-        std::wstring widePath(filePath.begin(), filePath.end());
-        WINTRUST_FILE_INFO fileData;
-        memset(&fileData, 0, sizeof(fileData));
-        fileData.cbStruct = sizeof(WINTRUST_FILE_INFO);
-        fileData.pcwszFilePath = widePath.c_str();
-        fileData.hFile = NULL;
-        fileData.pgKnownSubject = NULL;
-
-        GUID WVTPolicyGUID = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-        WINTRUST_DATA winTrustData;
-        memset(&winTrustData, 0, sizeof(winTrustData));
-        winTrustData.cbStruct = sizeof(winTrustData);
-        winTrustData.pPolicyCallbackData = NULL;
-        winTrustData.pSIPClientData = NULL;
-        winTrustData.dwUIChoice = WTD_UI_NONE;
-        winTrustData.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
-        winTrustData.dwUnionChoice = WTD_CHOICE_FILE;
-        winTrustData.dwStateAction = WTD_STATEACTION_VERIFY;
-        winTrustData.hWVTStateData = NULL;
-        winTrustData.pwszURLReference = NULL;
-        winTrustData.dwProvFlags = WTD_REVOCATION_CHECK_CHAIN |
-            WTD_HASH_ONLY_FLAG |
-            WTD_USE_DEFAULT_OSVER_CHECK |
-            WTD_LIFETIME_SIGNING_FLAG |
-            WTD_CACHE_ONLY_URL_RETRIEVAL;
-        winTrustData.pFile = &fileData;
-
-        LONG lStatus = WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
-
-        if (lStatus == ERROR_SUCCESS) {
-            winTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
-            WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
-            return "Valid (Authenticode)";
-        }
-
-        HCATADMIN hCatAdmin;
-        if (CryptCATAdminAcquireContext(&hCatAdmin, NULL, 0)) {
-            HANDLE hFile = CreateFileA(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-            if (hFile != INVALID_HANDLE_VALUE) {
-                DWORD dwHashSize;
-                if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, NULL, 0)) {
-                    BYTE* pbHash = new BYTE[dwHashSize];
-                    if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, pbHash, 0)) {
-                        CATALOG_INFO catalogInfo;
-                        memset(&catalogInfo, 0, sizeof(catalogInfo));
-                        catalogInfo.cbStruct = sizeof(catalogInfo);
-
-                        HCATINFO hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, pbHash, dwHashSize, 0, NULL);
-                        if (hCatInfo) {
-                            CryptCATCatalogInfoFromContext(hCatInfo, &catalogInfo, 0);
-                            CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0);
-                            delete[] pbHash;
-                            CloseHandle(hFile);
-                            CryptCATAdminReleaseContext(hCatAdmin, 0);
-                            return "Valid (Catalog)";
-                        }
-                    }
-                    delete[] pbHash;
-                }
-                CloseHandle(hFile);
-            }
-            CryptCATAdminReleaseContext(hCatAdmin, 0);
-        }
-
-        return "Invalid";
+        return EnhancedLogger::CheckFileSignatureUnified(filePath);
     }
 
     std::string IsSignatureTrusted(std::string& signature, const std::string& filePath) {
-        if (GetFileAttributesA(filePath.c_str()) == INVALID_FILE_ATTRIBUTES)
-            return "";
-
-        // If file already invalid or deleted, skip
-        if (signature == "Deleted" || signature == "Invalid")
-            return "";
-
-        // First, check Authenticode signature
-        std::wstring widePath(filePath.begin(), filePath.end());
-        WINTRUST_FILE_INFO fileData = {};
-        fileData.cbStruct = sizeof(WINTRUST_FILE_INFO);
-        fileData.pcwszFilePath = widePath.c_str();
-
-        GUID WVTPolicyGUID = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-        WINTRUST_DATA winTrustData = {};
-        winTrustData.cbStruct = sizeof(winTrustData);
-        winTrustData.dwUIChoice = WTD_UI_NONE;
-        winTrustData.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
-        winTrustData.dwUnionChoice = WTD_CHOICE_FILE;
-        winTrustData.dwStateAction = WTD_STATEACTION_VERIFY;
-        winTrustData.pFile = &fileData;
-
-        LONG lStatus = WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
-
-        // Close the state
-        winTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
-        WinVerifyTrust(NULL, &WVTPolicyGUID, &winTrustData);
-
-        if (lStatus == ERROR_SUCCESS) {
-            return "Trusted";
-        }
-
-        // If no Authenticode, check Catalog signature
-        HCATADMIN hCatAdmin = NULL;
-        bool catalogTrusted = false;
-        if (CryptCATAdminAcquireContext(&hCatAdmin, NULL, 0)) {
-            HANDLE hFile = CreateFileA(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-            if (hFile != INVALID_HANDLE_VALUE) {
-                DWORD dwHashSize = 0;
-                if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, NULL, 0)) {
-                    BYTE* pbHash = new BYTE[dwHashSize];
-                    if (CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, pbHash, 0)) {
-                        HCATINFO hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, pbHash, dwHashSize, 0, NULL);
-                        if (hCatInfo) {
-                            catalogTrusted = true;
-                            CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0);
-                        }
-                    }
-                    delete[] pbHash;
-                }
-                CloseHandle(hFile);
-            }
-            CryptCATAdminReleaseContext(hCatAdmin, 0);
-        }
-
-        if (catalogTrusted) {
-            return "Trusted";
-        }
-
-        // If neither Authenticode nor catalog, mark signature invalid
-        signature = "Invalid";
-
-        // Determine return value based on previous lStatus
-        if (lStatus == TRUST_E_NOSIGNATURE) return "Unsigned";
-        return "Untrusted";
+        return EnhancedLogger::CheckFileTrustUnified(filePath, signature);
     }
 
     std::string GetFileModificationTime(const std::string& filePath) {
@@ -333,7 +202,7 @@ namespace RegistryParser {
                 }
 
                 if (!EnhancedLogger::IsDuplicateEntry(path, issueType)) {
-                    EnhancedLogger::DetailedLogEntry logEntry;
+                    DetailedLogEntry logEntry = {};
                     logEntry.timestamp = EnhancedLogger::GetCurrentTimestamp();
                     logEntry.scanType = "Registry";
                     logEntry.source = "CompatibilityAssistant";
@@ -433,7 +302,7 @@ namespace RegistryParser {
                 }
 
                 if (!EnhancedLogger::IsDuplicateEntry(path, issueType)) {
-                    EnhancedLogger::DetailedLogEntry logEntry;
+                    DetailedLogEntry logEntry = {};
                     logEntry.timestamp = EnhancedLogger::GetCurrentTimestamp();
                     logEntry.scanType = "Registry";
                     logEntry.source = "MuiCache";
@@ -588,7 +457,7 @@ namespace RegistryParser {
                             }
 
                             if (!EnhancedLogger::IsDuplicateEntry(path, issueType)) {
-                                EnhancedLogger::DetailedLogEntry logEntry;
+                                DetailedLogEntry logEntry = {};
                                 logEntry.timestamp = EnhancedLogger::GetCurrentTimestamp();
                                 logEntry.scanType = "Registry";
                                 logEntry.source = "BAM";

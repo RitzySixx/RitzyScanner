@@ -1,5 +1,3 @@
-#define UNICODE
-#define _UNICODE
 #include "strings.h"
 #include "utils.h"
 
